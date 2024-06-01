@@ -1,0 +1,189 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+from transformers import BertTokenizer, BertModel
+import torch
+from sklearn.metrics.pairwise import cosine_similarity
+import ast
+from tqdm import tqdm
+# Read recipe inputs
+clusters_data = dataiku.Dataset("ed_clusters")
+clusters_df = clusters_data.get_dataframe()
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def convert_string_to_array(string):
+    try:
+        array = np.array(ast.literal_eval(string))
+        return array
+    except ValueError as e:
+        print(f"Error converting string to array: {e}")
+        return np.array([])
+
+# Example usage:
+clusters_df['TF-IDF-score'] = clusters_df['TF-IDF-score'].apply(convert_string_to_array)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# clusters_df["TF-IDF-score"][0]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from transformers import AutoTokenizer, AutoModel
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+
+tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
+model = AutoModel.from_pretrained('intfloat/multilingual-e5-large').to(device)
+
+# Function to perform average pooling
+def average_pool(last_hidden_states, attention_mask):
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+# Function to generate embeddings for TF-IDF terms
+def get_embeddings_for_terms(terms):
+    batch_dict = tokenizer(terms, padding=True, truncation=True, return_tensors='pt', max_length=512).to(device)
+    with torch.no_grad():
+        outputs = model(**batch_dict)
+        batch_embeddings = outputs.last_hidden_state
+        mean_batch_embeddings = average_pool(batch_embeddings, batch_dict['attention_mask'])
+    return mean_batch_embeddings.cpu().numpy()
+
+def aggregate_embeddings(tfidf_terms, tfidf_scores):
+    weighted_embeddings = []
+    for term, score in zip(tfidf_terms, tfidf_scores):
+        if term in term_embeddings:
+            #print(f"Term: {term}, Score: {score}, Type of Score: {type(score)}, Embedding Shape: {term_embeddings[term].shape}")
+            try:
+                weighted_embeddings.append(term_embeddings[term] * score)
+            except Exception as e:
+                print(f"Error in processing term '{term}' with score '{score}': {e}")
+    return np.mean(weighted_embeddings, axis=0) if weighted_embeddings else np.zeros(model.config.hidden_size)
+
+# Generate embeddings for each unique TF-IDF term
+unique_terms = set(term for terms in clusters_df['TF-IDF'] for term in terms)
+
+# Use batching
+def get_embeddings_for_batch_terms(terms, batch_size = 64):
+    batch_embeddings = []
+    # Assuming you've determined an optimal batch size based on your hardware
+    for i in range(0, len(terms), batch_size):
+        batch_terms = terms[i:i+batch_size]
+        embeddings = get_embeddings_for_terms(batch_terms)
+        batch_embeddings.extend(embeddings)
+    return batch_embeddings
+
+# Assuming unique_terms is a list of unique terms
+batch_embeddings = get_embeddings_for_batch_terms(list(unique_terms), batch_size = 512)
+term_embeddings = dict(zip(unique_terms, batch_embeddings))
+
+# Corrected line for calculating weighted average embeddings for each cluster
+cluster_embeddings = [aggregate_embeddings(terms, scores) for terms, scores in zip(clusters_df['TF-IDF'], clusters_df['TF-IDF-score'])]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from umap import UMAP
+import numpy as np
+import pandas as pd
+from tqdm.auto import tqdm
+from datetime import datetime
+
+def calculate_similarities(clusters_df, cluster_embeddings, n_components = 2, reduce = True):
+    # Extract 'Date' and 'Cluster ID' from clusters_df
+    cluster_dates = clusters_df['Date'].tolist()
+    cluster_ids = clusters_df['Cluster ID'].tolist()
+    
+    embeddings_matrix = np.vstack(cluster_embeddings)
+    if reduce:
+        # Perform UMAP reduction
+        print(f"Reducing embeddings to {n_components} dimensions with UMAP...")
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print("Starting time: ", current_time)
+        
+        reducer = UMAP(n_components=n_components, random_state=42, metric='cosine')
+        reduced_embeddings = reducer.fit_transform(embeddings_matrix)
+        
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print("End time: ", current_time)
+    else:
+        reduced_embeddings = embeddings_matrix
+    
+    # Normalize reduced embeddings to unit vectors
+    print(f"Normalising embeddings...")
+    norms = np.linalg.norm(reduced_embeddings, axis=1, keepdims=True)
+    normalized_embeddings = np.where(norms > 0, reduced_embeddings / norms, 0)
+    
+    # Calculate cosine similarity matrix using dot product on normalized embeddings
+    print("Calculating cosine similarities...")
+    similarity_matrix = np.dot(normalized_embeddings, normalized_embeddings.T)
+    
+    print("Creating dataframe...")
+    # Extract upper triangle indices to avoid duplicate calculations and self-similarity
+    upper_tri_indices = np.triu_indices_from(similarity_matrix, k=1)
+    
+    # Prepare results as a list of dictionaries
+    similarity_scores = [{
+        'date_1': cluster_dates[i],
+        'Cluster_ID_1': cluster_ids[i],
+        'date_2': cluster_dates[j],
+        'Cluster_ID_2': cluster_ids[j],
+        'similarity': similarity_matrix[i, j]
+    } for i, j in zip(*upper_tri_indices)]
+    
+    # Convert to DataFrame
+    similarity_scores_df = pd.DataFrame(similarity_scores)
+    
+    return similarity_scores_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Use this function with the DataFrame and target dimensionality
+target_dimension = 5  # Adjust this as needed\
+reduce = True
+similarity_scores_df = calculate_similarities(clusters_df, cluster_embeddings, target_dimension, reduce)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+similarity_scores_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# similarity_scores_df.similarity.describe()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import matplotlib.pyplot as plt
+# # Plot a histogram for a quick approximation of the distribution
+# similarity_scores_df['similarity'].hist(bins=50)  # Adjust the number of bins as needed
+# plt.show()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write recipe outputs
+sim_scores = dataiku.Dataset("ed_cluster_similarity_scores")
+sim_scores.write_with_schema(similarity_scores_df)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# from sklearn.metrics.pairwise import cosine_similarity
+# import numpy as np
+# from tqdm.auto import tqdm
+
+# # Intuitive variable names
+# cluster_dates = clusters_df['Date'].tolist()
+# cluster_ids = clusters_df['Cluster ID'].tolist()
+
+# # Precompute all cluster embeddings as a matrix for efficient access
+# # This assumes `cluster_embeddings` is a list of numpy arrays
+# embeddings_matrix = np.vstack(cluster_embeddings)
+# print("Normalising embeddings:")
+# # Pre-normalize all embeddings to unit vectors
+# norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
+# normalized_embeddings = np.where(norms > 0, embeddings_matrix / norms, 0)
+
+# # Initialize a list to store similarity scores
+# similarity_scores = []
+
+# print("Calculating cluster similarities:")
+# # Use tqdm for progress indication
+# for i in tqdm(range(len(normalized_embeddings)), desc="Calculating Similarities"):
+#     for j in range(i + 1, len(normalized_embeddings)):
+#         # Calculate similarity as dot product of pre-normalized vectors
+#         similarity = np.dot(normalized_embeddings[i], normalized_embeddings[j])
+
+#         # Store the results with intuitive names
+#         similarity_scores.append({
+#             'date_1': cluster_dates[i],
+#             'Cluster_ID_1': cluster_ids[i],
+#             'date_2': cluster_dates[j],
+#             'Cluster_ID_2': cluster_ids[j],
+#             'similarity': similarity
+#         })
+
+# # Convert the results to a DataFrame
+# similarity_scores_df = pd.DataFrame(similarity_scores)

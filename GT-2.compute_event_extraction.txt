@@ -1,0 +1,207 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import openai
+import json
+
+# Read recipe inputs
+weekly_clusters_with_docs = dataiku.Dataset("weekly_clusters_with_docs")
+weekly_clusters_with_docs_df = weekly_clusters_with_docs.get_dataframe()
+tweets_df = weekly_clusters_with_docs_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+openai.api_key = "a796cd0d45604c42b9738d7900c11861"
+openai.api_base = "https://topic-representation-long.openai.azure.com/"
+openai.api_type = "azure"
+openai.api_version = '2023-05-15'
+deployment_name = 'ChatGPT-Long'
+
+openai_config = {
+            "max_tokens": 8000,
+            "temperature": 0.2 ,
+            "top_p": 0.2
+            }
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+tweets_df.head()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import ast
+tweets_df['representative_docs'] = tweets_df['representative_docs'].apply(ast.literal_eval)
+tweets_df['ctfidf_representation'] = tweets_df['ctfidf_representation'].apply(ast.literal_eval)
+tweets_df['keybert_representation'] = tweets_df['keybert_representation'].apply(ast.literal_eval)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+system_message = {
+    "role": "system",
+    "content": "You are a helpful assistant. Your primary task is to determine whether the provided cluster of tweets, \
+    extracted from German politicians' Twitter accounts, represents an important event or a regular (everyday) conversation.\
+    The analysis should consider the features and representative documents (tweets) provided for a specific period. \
+    If the content represents an important event, the event should be tied to something exclusive to the period and \
+    not a topic that would be discussed by the politicians on a regular basis. The response should always be in English.\
+    Based on the analysis, please provide a response in a structured JSON format with the following fields: \
+    - 'is_event': Boolean (True if the cluster represents an event, False otherwise) \
+    - 'event_name': A short title for the event (in English, use German words only if necessary) \
+    - 'event_description': A brief explanation of the event in 1-2 sentences (in English, focusing on who, what, where, when, and why) \
+    - 'event_date': The exact date the event happened in YYYY-MM-DD format (use '0000-00-00' if 'is_event' is False) \
+    If the content does not represent an event, set 'is_event' to False and provide default values for 'event_name', 'event_description', and 'event_date'."
+}
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def create_prompt(row):
+    start_date = row['start_date']
+    end_date = row['end_date']
+    ctfidf_representation = ', '.join(row['ctfidf_representation'])
+    keybert_representation = ', '.join(row['keybert_representation'])
+    representative_docs = '\n'.join(row['representative_docs'])
+    
+    event_examples = f""" 
+    An event should be something significant that had a notable effect, reaction, controversy, or discourse. Here are examples of what should be considered an event:
+    - A controversial law that sparked significant debate or protests
+    - Fights or significant altercations in the parliament
+    - Changes in leadership within the parliament or political parties
+    - Wars or military actions
+    - Natural disasters
+    - Large protests or public demonstrations
+    - Major scandals or political controversies
+
+    Conversely, a regular conversation should include routine activities or discussions that do not lead to significant reactions or impact. For example:
+    - Routine readings of laws that were expected and had no significant impact
+    - Standard political meetings without notable outcomes
+    - General discussions about ongoing policies without new developments
+    """
+
+    prompt = f"""
+    I am providing you with the representative features and documents of a cluster extracted from tweets posted by \
+    German politicians. The cluster was created using tweets scraped from their official Twitter accounts, and the\
+    content includes both German and English languages. The period during which these tweets were collected is from \
+    {start_date} to {end_date}.
+
+    Please analyze the provided features and representative documents to determine whether the content represents\
+    a regular (everyday) conversation or an important event being discussed. An event should be tied to something \
+    exclusive to the period and not a topic that would be discussed by the politicians on a regular basis. \
+    Here are the details:
+
+    ### Period:
+    - Start Date: {start_date}
+    - End Date: {end_date}
+
+    ### Representative Features:
+    - C-TF-IDF Representation: {ctfidf_representation}
+    - KeyBERT Representation: {keybert_representation}
+
+    ### Representative Documents (Tweets):
+    {representative_docs}
+    
+    {event_examples}
+
+    Based on this information, is the cluster discussing a regular conversation or an important event? \
+    Please provide your reasoning in the following JSON format:
+
+    {{
+        "is_event": true or false,
+        "event_name": "string",
+        "event_description": "string",
+        "event_date": "YYYY-MM-DD"
+    }}. 
+
+    If you determine that the cluster corresponds to an event (is_event is true), please fill out all of the fields with \
+    the following details:
+    - "is_event": true
+    - "event_name": A short title for the event (in English, use German words only if necessary)
+    - "event_description": A brief explanation of the event with key details in 1-2 sentences \
+    (in English, focusing on who, what, where, when, and why)
+    - "event_date": The exact date the event happened in YYYY-MM-DD format
+
+    If you determine that the cluster does not correspond to an event (is_event is false), please fill out the fields with:
+    - "is_event": false
+    - "event_name": ""
+    - "event_description": ""
+    - "event_date": "0000-00-00"
+    """
+    return prompt
+
+# Example usage with a DataFrame row
+# Assuming 'df' is your DataFrame and you want to generate a prompt for the first row
+example_row = tweets_df.iloc[0]
+example_prompt = create_prompt(example_row)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from openai_utils import (
+    handle_rate_limit_error,
+    handle_json_format_error,
+)
+import time
+import copy
+from tqdm import tqdm
+
+# Function to process each row and get the GPT-3 response with error handling
+def process_row(row):
+    current_prompt = create_prompt(row)
+    messages = [system_message, {"role": "user", "content": current_prompt}]
+    
+    max_attempts = 3  # Maximum attempts to get correct JSON
+    for attempt in range(max_attempts):
+        try:
+            response = openai.ChatCompletion.create(
+                engine=deployment_name,
+                messages=messages,
+                **openai_config
+            )
+            content = response['choices'][0]['message']['content']
+            result = json.loads(content)
+            return result
+        except openai.error.InvalidRequestError as e:
+            if "maximum context length" in str(e):
+                print(f"Context too long in attempt {attempt + 1}.")
+            else:
+                print(f"Attempt {attempt + 1} failed. Error: {str(e)}")
+                break  # Exit the loop for invalid request errors
+        except json.decoder.JSONDecodeError as e:
+            result = handle_json_format_error(
+                current_messages=messages,
+                deployment_name=deployment_name,
+                response=response,
+                error_message=e,
+                max_attempts=max_attempts
+            )
+            return result
+        except openai.error.RateLimitError as e:
+            print(f"RateLimitError in attempt {attempt + 1}")
+            if attempt < max_attempts - 1:
+                error_message = str(e)
+                handle_rate_limit_error(error_message)
+            else:
+                print("Maximum retry attempts reached.")
+        except Exception as e:
+            print(f"Error in attempt {attempt + 1}: {str(e)}")
+            if attempt == max_attempts - 1:
+                handle_rate_limit_error(str(e))
+            else:
+                time.sleep(5)  # Wait for 5 seconds before retrying
+    return {"is_event": False, "event_name": "", "event_description": "", "event_date": "0000-00-00"}
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Adding new columns to tweets_df for the results
+tweets_df['is_event'] = False
+tweets_df['event_name'] = ""
+tweets_df['event_description'] = ""
+tweets_df['event_date'] = "0000-00-00"
+
+save_freq = 300
+event_extraction = dataiku.Dataset("weekly_event_extraction")
+
+# Iterate over each row in tweets_df and process it
+for idx, row in tqdm(tweets_df.iterrows(), desc="Processing topic clusters"):
+    if (idx % save_freq == 0) and (idx!=0):
+        print(f"Saving dataframe for index: {idx}")
+        # Save results periodically
+        event_extraction.write_with_schema(tweets_df)
+    
+    result = process_row(row)
+    tweets_df.at[idx, 'is_event'] = result.get('is_event', False)
+    if result['is_event']:
+        print(result.get('event_name', ""),result.get('event_date', "0000-00-00"))
+        tweets_df.at[idx, 'event_name'] = result.get('event_name', "")
+        tweets_df.at[idx, 'event_description'] = result.get('event_description', "")
+        tweets_df.at[idx, 'event_date'] = result.get('event_date', "0000-00-00")
+    else:
+        print('not an event')
+        
+# Final save of results
+event_extraction.write_with_schema(tweets_df)

@@ -1,0 +1,212 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import ast
+from tqdm import tqdm
+import openai
+from openai_utils import (
+    handle_rate_limit_error,
+    handle_json_format_error,
+)
+import json
+
+# Read recipe inputs
+weekly_events_merged = dataiku.Dataset("weekly_events_merged")
+merged_events = weekly_events_merged.get_dataframe()
+
+# Filter only for non-redundant events
+candidates_df = merged_events[(merged_events["is_redundant"] == False) & (merged_events["is_event"]== True)]
+
+# Write recipe outputs
+key_events_dataset = dataiku.Dataset("key_events_per_period")
+
+# Fixing lists
+candidates_df['representative_docs'] = candidates_df['representative_docs'].apply(ast.literal_eval)
+candidates_df['ctfidf_representation'] = candidates_df['ctfidf_representation'].apply(ast.literal_eval)
+candidates_df['keybert_representation'] = candidates_df['keybert_representation'].apply(ast.literal_eval)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+openai.api_key = "a796cd0d45604c42b9738d7900c11861"
+openai.api_base = "https://topic-representation-long.openai.azure.com/"
+openai.api_type = "azure"
+openai.api_version = '2023-05-15'
+deployment_name = 'ChatGPT-Long'
+
+openai_config = {
+            "max_tokens": 8000,
+            "temperature": 0.2 ,
+            "top_p": 0.2
+            }
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+system_message = {
+    "role": "system",
+    "content": "You are a helpful assistant. Your task is to determine the most significant event from a list of events detected \
+    for a specific week. Each event includes a topic_id, title, date, and a short description. Analyze the list and identify the \
+    most significant event in terms of general impact. For the most significant event, provide a detailed description that answers \
+    the WH questions (who, what, when, where, why) and clearly states the causes, consequences, and impact of the event. \
+    The response should be in the specified JSON format."
+}
+
+# Function to create the prompt for identifying the most important event
+def create_importance_prompt(week_events):
+    events_details = []
+    for _, row in week_events.iterrows():
+        event_detail = {
+            "topic_id": row['topic_id'],
+            "event_name": row['event_name'],
+            "event_date": row['event_date'],
+            "event_description": row['event_description'],
+        }
+        events_details.append(event_detail)
+    
+    prompt = f"""
+    I am providing you with a list of events detected for a specific week. These events were extracted \
+    by clustering tweets written by German politicians and then prompting GPT to determine which of the topics obtained \
+    through the clustering correspond to events, extracting details about each event. \
+    Each event includes a topic_id, title (event_name), date (event_date), and a short description (event_description). \
+    Please analyze the list and identify the most significant event in terms of general impact. For the most significant event, \
+    provide a detailed description that answers the WH questions (who, what, when, where, why) and clearly states the causes, \
+    consequences, and impact of the event.
+
+    Here are the details of the events:
+
+    {events_details}
+    
+    Important: Ensure that the response is in valid JSON format and avoid using characters such as newlines, \
+    tabs, unescaped double quotes, and backslashes that may break the JSON structure.
+
+    Based on this information, please provide your response in the following JSON format:
+
+    {{
+        "key_event_id": int,  # The ID of the most significant event
+        "detailed_event_description": "string"  # A detailed description of the most significant event
+    }}
+    """
+    return prompt
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import re
+import copy
+import json
+
+def preprocess_json_string(json_string):
+    # Remove escaped newline characters
+    json_string = re.sub(r'\\n', ' ', json_string)
+    # Remove actual newline characters
+    json_string = re.sub(r'\n', ' ', json_string)
+    # Replace multiple spaces with a single space
+    json_string = re.sub(r'\s+', ' ', json_string)
+    return json_string
+
+def handle_json_format_error_with_preprocessing(current_messages, deployment_name, response, error_message, max_attempts=3, openai_config=None):
+    try:
+        # Preprocess the JSON string to handle special characters
+        content = response['choices'][0]['message']['content']
+        preprocessed_content = preprocess_json_string(content)
+        
+        # Try loading the preprocessed JSON
+        result = json.loads(preprocessed_content)
+        return result
+    except json.JSONDecodeError as e:
+        print("Preprocessing did not fix the JSON. Proceeding with the original JSON handling logic.")
+        # Call the existing handle_json_format_error function
+        return handle_json_format_error(current_messages, deployment_name, response, error_message, max_attempts, openai_config)
+
+def get_request_with_backoff(messages, deployment_name, openai_config, max_attempts=3):
+    for attempt in range(max_attempts):
+        try:
+            response = openai.ChatCompletion.create(
+                engine=deployment_name,
+                messages=messages,
+                **openai_config
+            )
+            content = response['choices'][0]['message']['content']
+            result = json.loads(content)
+            return result
+        except openai.error.InvalidRequestError as e:
+            if "maximum context length" in str(e):
+                print(f"Context too long in attempt {attempt + 1}.")
+            else:
+                print(f"Attempt {attempt + 1} failed. Error: {str(e)}")
+                break  # Exit the loop for invalid request errors
+        except json.decoder.JSONDecodeError as e:
+            print(f"JSON decoding failed: {str(e)}")
+            print(f"Attempting to fix JSON, attempt {attempt + 1}")
+            result = handle_json_format_error_with_preprocessing(
+                current_messages=messages,
+                deployment_name=deployment_name,
+                response=response,
+                error_message=e,
+                max_attempts=max_attempts,
+                openai_config=openai_config
+            )
+            return result
+        except openai.error.RateLimitError as e:
+            print(f"RateLimitError in attempt {attempt + 1}")
+            if attempt < max_attempts - 1:
+                error_message = str(e)
+                handle_rate_limit_error(error_message)
+            else:
+                print("Maximum retry attempts reached.")
+        except Exception as e:
+            print(f"Error in attempt {attempt + 1}: {str(e)}")
+            if attempt == max_attempts - 1:
+                handle_rate_limit_error(str(e))
+            else:
+                time.sleep(5)  # Wait for 5 seconds before retrying
+    return {"key_event_id": None, "detailed_event_description": ""}
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import json 
+import time
+
+# Function to process weekly events
+def process_weekly_events_for_importance(week_events):
+    current_prompt = create_importance_prompt(week_events)
+    messages = [system_message, {"role": "user", "content": current_prompt}]
+    result = get_request_with_backoff(messages, deployment_name, openai_config)
+    return result
+
+# Process each week
+importance_results = []
+
+# Group non-redundant events by start_date and end_date
+candidates_grouped = candidates_df.groupby(['start_date', 'end_date'])
+
+for (start_date, end_date), week_events in tqdm(candidates_grouped, desc="Processing weeks for importance"):
+    if not week_events.empty:
+        # Create prompt for the current week
+        response = process_weekly_events_for_importance(week_events)
+        
+        if response is None:
+            print(f"Prompting broke for period (response is None):{start_date} to {end_date}. No row saved")
+            continue
+            
+        # Extract most important event details from the response
+        key_event_id = response.get("key_event_id", None)
+        
+        # Handle broken request
+        if key_event_id is None:
+            print(f"Prompting broke for period:{start_date} to {end_date}. No row saved")
+            continue
+        else:
+            # Find the row with the key_event_id
+            key_event_row = week_events[week_events['topic_id'] == key_event_id].iloc[0]
+            detailed_event_description = response.get("detailed_event_description", "")
+
+        # Add the response to the importance results
+        importance_results.append({
+            "start_date": start_date,
+            "end_date": end_date,
+            "key_event_id": key_event_id,
+            "event_name": key_event_row['event_name'],
+            "event_date": key_event_row['event_date'],
+            "event_description": key_event_row['event_description'],
+            "event_description_detailed": detailed_event_description
+        })
+        print(start_date, response)
+
+# Create a DataFrame from the importance results
+key_events_df = pd.DataFrame(importance_results)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+key_events_dataset.write_with_schema(key_events_df)

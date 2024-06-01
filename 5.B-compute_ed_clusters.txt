@@ -1,0 +1,776 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# OLD FILE THAT WAS USED - Contains full dataset embeddings
+#file_name = "umap_embeddings_e5_large_20240201_092831.pkl"
+# with umap_embeddings_folder.get_download_stream(file_name) as stream:
+#     data_loaded = pickle.load(stream)
+
+# tweet_ids = data_loaded["tweet_ids"]
+# umap_embeddings = data_loaded["umap_embeddings"]
+
+# OLD CONFIG USED FOR HDBSCAN - SECOND WAS ORIGINALLY USED (5,20,0.1,1.2,'leaf')
+# hdbscan_configs = [
+#     {
+#     "min_cluster_size": 2,
+#     "min_samples": 20,
+#     "cluster_selection_epsilon": 0.1,
+#     "alpha": 1.2,
+#     "cluster_selection_method": 'leaf'
+#     },
+# #     {
+# #     "min_cluster_size": 5,
+# #     "min_samples": 20,
+# #     "cluster_selection_epsilon": 0.1,
+# #     "alpha": 1.2,
+# #     "cluster_selection_method": 'leaf'
+# #     },
+# ]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# Steps for determining clustering (HDBScan) hyperparameters
+1. Create an initial set of candidates/search space
+2. Calculate metrics that don't require contents/texts - number of clusters, % of outliers, number of days without clusters etc.
+3. Construct a smaller list of final candidates 
+4. Calculate the coherence and diversity in temrs of TF-IDF scores obtained from the clusters
+5. Pick the best configuration (most likely "good enough" coherence, but clusters aren't so small that it ruins diversity)
+6. Save the results of the best configration for event detection
+    1. Save the clusterings - (Date, Cluster_ID) <=> text_id mappings
+    2. Save the TF-IDF representations 
+    3. Save any additional metrics/info that was generated
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import pickle
+from datetime import datetime
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+import hdbscan
+import time
+import ast
+import os
+from tqdm import tqdm
+
+# Read recipe inputs
+# Dataset tweets_cleaned renamed to preprocessed_data by fraunhofer1 on 2024-02-26 22:21:43
+#tweets_cleaned = dataiku.Dataset("preprocessed_data")
+#tweets_df = tweets_cleaned.get_dataframe()
+
+umap_embeddings_folder = dataiku.Folder("qgFUqORn")
+umap_embeddings_folder_path = umap_embeddings_folder.get_path()
+
+preprocessed_data_folder = dataiku.Folder("PpRdk4F7")
+preprocessed_data_folder_path = preprocessed_data_folder.get_path()
+
+ed_clusters_folder = dataiku.Folder("hcdT8sQf")
+ed_clusters_folder_path = ed_clusters_folder.get_path()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Construct the full file path
+hdbscan_experiments_file_path = os.path.join(ed_clusters_folder_path, 'testing_configs', 'clustering_metrics.csv')
+
+# Read the dataframe
+statistics_df = pd.read_csv(hdbscan_experiments_file_path)
+# Given that we observe no changes for different values of alpha we narrow down the search space
+statistics_df = statistics_df[statistics_df['alpha']==1.2]
+# Dropping columns with fixed values
+statistics_df.drop(columns=['cluster_selection_method','alpha'], inplace=True)
+# Filtering out configs that have too many missing days
+#statistics_df = statistics_df[statistics_df['days_without_clusters']<=30]
+# Filtering out configs that have too many clusters per day (because of complexity during similarity calculation)
+#statistics_df = statistics_df[statistics_df['average_num_clusters_per_day']<=20]
+statistics_df.sort_values(["average_dbcv_score",'days_without_clusters','average_num_clusters_per_day'], ascending=[False, True,True])
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+device = select_gpu_with_most_free_memory()
+print(f"Using device: {device}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons= load_experiment_jsons(
+                            root_folder_path = umap_embeddings_folder_path,
+                            dataset_name = "",
+                            experiment_details_subfolder = "umap_experiment_details")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+original_experiments = [e for e in experiment_jsons if 
+                       (e["embedding_config"]["model_name"] == "intfloat/multilingual-e5-large")
+                       and (e["preprocessing_steps"]["remove_hashtags"] == False)
+                       and (e["umap_config"]["n_components"] == 2)
+                       and (e["umap_config"]["n_neighbors"] == 15)
+                       ]
+# Sanity check
+print(len(original_experiments)," ",original_experiments[0]["dataset_name"])
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def prepare_clustering_data(experiment, umap_emb_with_id, dataframe_columns):
+    tweet_ids = umap_emb_with_id["tweet_ids"]
+    umap_embeddings = umap_emb_with_id["umap_embeddings"]
+    tweets_df = load_experiment_objects([experiment], file_path_key = "dataset_location")[0]
+    
+    # Keep only IDs that were used for the embeddings
+    tweet_ids_df = pd.DataFrame({'tweet_id': tweet_ids})
+    filtered_tweets_df = tweet_ids_df.merge(tweets_df, on='tweet_id', how='left')
+    umap_embeddings = np.array(umap_embeddings)
+    if len(umap_embeddings) == len(filtered_tweets_df):
+        filtered_tweets_df['umap_embedding'] = list(umap_embeddings)
+    else:
+        print("Error: The number of embeddings does not match the number of rows in the DataFrame.")
+        return
+    # We keep the hashtags to analyse frequent words
+    tweets_df = filtered_tweets_df[dataframe_columns]
+    tweets_df['date'] = tweets_df['created_at'].dt.date
+    return tweets_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Old clustering code - just set get_td_idf = False if you want to test out hdbscan configs in space
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# def perform_clustering(grouped_tweets, hdbscan_config, global_vectorizer, top_n = 10, get_tf_idf = True, verbose = False):
+#     cluster_results = []
+
+#     # Function to process each group of tweets
+#     for date, group in tqdm(grouped_tweets, desc = "Clustering Tweets for Each Day"):
+#         day_embeddings = np.array(group['umap_embedding'].tolist())
+
+#         # Perform HDBSCAN clustering
+#         if verbose:
+#             print(f"HDBSCAN Start Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+#         start_time = time.time()
+
+#         clusterer = hdbscan.HDBSCAN(**hdbscan_config)
+#         cluster_labels = clusterer.fit_predict(day_embeddings)
+
+#         end_time = time.time()
+#         if verbose:
+#             print(f"HDBSCAN End Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+#             print(f"Time taken for HDBSCAN: {(end_time - start_time) / 60} minutes")
+
+#         # Process each cluster
+#         for cluster_id in set(cluster_labels) - {-1}:
+#             cluster_tweets = group[cluster_labels == cluster_id]
+#             tweet_ids = cluster_tweets['tweet_id'].tolist()
+#             # Store the results
+              
+#             new_row = {
+#                 "Date": date,
+#                 "Cluster ID": cluster_id,
+#                 "tweet_ids": tweet_ids,
+#                 "cluster_size": len(tweet_ids),
+#                 }
+              
+#             if get_tf_idf:
+#                 # TF-IDF transformation
+#                 tfidf_matrix = global_vectorizer.transform(cluster_tweets['full_text'])
+#                 sorted_indices = np.argsort(tfidf_matrix.sum(axis=0).tolist()[0])[::-1]
+#                 top_words = np.array(global_vectorizer.get_feature_names_out())[sorted_indices[:top_n]]
+#                 top_scores = np.sort(tfidf_matrix.sum(axis=0).tolist()[0])[::-1][:top_n]
+#                 new_row.update({           
+#                     "TF-IDF": top_words.tolist(),
+#                     "TF-IDF-score": top_scores.tolist(),
+#                     })
+              
+#             cluster_results.append(new_row)
+
+#     clusters_df = pd.DataFrame(cluster_results)
+#     return clusters_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### New clustering code - we want to save metrics such as 
+- dbcv_score
+- days_without_clusters in the timeline
+- number of cluster per day (avg)
+- cluster size (avg)
+- coherence score (avg)
+- diversity score (avg)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def perform_clustering(grouped_tweets, hdbscan_config, global_vectorizer, top_n=10, get_tf_idf=True, get_dbcv = False, verbose=False):
+    cluster_results = []
+    
+    statistics = {
+        'days_without_clusters': 0,
+        'num_clusters_per_day': [],
+        'average_cluster_size': []
+    }
+    
+    if get_dbcv:
+        statistics['dbcv_score'] = []
+
+    # Function to process each group of tweets
+    for date, group in tqdm(grouped_tweets, desc="Clustering Tweets for Each Day"):
+        day_embeddings = np.array(group['umap_embedding'].tolist())
+
+        # Perform HDBSCAN clustering
+        if verbose:
+            print(f"HDBSCAN Start Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        start_time = time.time()
+
+        clusterer = hdbscan.HDBSCAN(**hdbscan_config, 
+                                    gen_min_span_tree = get_dbcv)
+        cluster_labels = clusterer.fit_predict(day_embeddings)
+
+        end_time = time.time()
+        if verbose:
+            print(f"HDBSCAN End Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Time taken for HDBSCAN: {(end_time - start_time) / 60} minutes")
+
+        # Calculate statistics
+        if len(set(cluster_labels) - {-1}) == 0:
+            statistics['days_without_clusters'] += 1
+        else:
+            statistics['num_clusters_per_day'].append(len(set(cluster_labels) - {-1}))
+            cluster_sizes = [sum(cluster_labels == label) for label in set(cluster_labels) - {-1}]
+            statistics['average_cluster_size'].extend(cluster_sizes)
+
+        # Store DBCV score
+        if get_dbcv:
+            statistics['dbcv_score'].append(clusterer.relative_validity_)
+
+        # Process each cluster
+        for cluster_id in set(cluster_labels) - {-1}:
+            cluster_tweets = group[cluster_labels == cluster_id]
+            tweet_ids = cluster_tweets['tweet_id'].tolist()
+            new_row = {
+                "Date": date,
+                "Cluster ID": cluster_id,
+                "tweet_ids": tweet_ids,
+                "cluster_size": len(tweet_ids),
+            }
+                  
+            if get_tf_idf:
+                # TF-IDF transformation
+                tfidf_matrix = global_vectorizer.transform(cluster_tweets['full_text'])
+                sorted_indices = np.argsort(tfidf_matrix.sum(axis=0).tolist()[0])[::-1]
+                top_words = np.array(global_vectorizer.get_feature_names_out())[sorted_indices[:top_n]]
+                top_scores = np.sort(tfidf_matrix.sum(axis=0).tolist()[0])[::-1][:top_n]
+                new_row.update({
+                    "TF-IDF": top_words.tolist(),
+                    "TF-IDF-score": top_scores.tolist(),
+                })
+
+            cluster_results.append(new_row)
+
+    clusters_df = pd.DataFrame(cluster_results)
+
+    # Calculate and return the statistics
+    if get_dbcv:
+        statistics['average_dbcv_score'] = np.mean(statistics['dbcv_score'])
+    statistics['average_num_clusters_per_day'] = np.mean(statistics['num_clusters_per_day']) if statistics['num_clusters_per_day'] else 0
+    statistics['average_cluster_size'] = np.mean(statistics['average_cluster_size']) if statistics['average_cluster_size'] else 0
+
+    # Remove list fields from statistics
+    statistics = {key: value for key, value in statistics.items() if not isinstance(value, list)}
+        
+    return clusters_df, statistics
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# We start at 2017 as there is not enough data in earlier years and the data collection was focused on September 2017 onwards
+start_date = pd.Timestamp('2017-01-01')
+
+# Columns that we want to get from the original dataframe when fetching by Tweet_id
+dataframe_columns = ["tweet_id","full_text","created_at","umap_embedding","hashtags"]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import nltk
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+
+german_stop_words = stopwords.words('german')
+
+# Added after noticing that some of the clusters were predominantly made of english stop words
+english_stop_words = stopwords.words('english')
+
+# Added after noticing that placeholders like 'rt' and 'user' were biasing the similarity scores
+twitter_words = ['rt', 'user']
+
+# Note necessary if we set limits on frequency 
+#political_words = ['afd','cdu','fdp','spd','deutschland','heute','mehr','müssen','menschen']
+
+combined_stop_words = list(set(english_stop_words + german_stop_words + twitter_words))
+# combined_stop_words = list(set(english_stop_words + german_stop_words + twitter_words + political_words))
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Original search space - should be used with get_dbcv True (and get_tf_idf False)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import itertools
+# min_cluster_size_options = [2, 5, 10, 25]  # About 2% to 5% of the average daily texts
+# min_samples_options = [5, 10, 20, 30]  # Typically similar to min_cluster_size
+# cluster_selection_epsilon_options =  [0.05, 0.1, 0.2]  # Small steps, needs fine-tuning
+# alpha_options = [0.8, 1.0, 1.2]  # Smaller range, not as sensitive
+
+
+# # Create a list of all possible combinations
+# search_space = list(itertools.product(
+#     min_cluster_size_options,
+#     min_samples_options,
+#     cluster_selection_epsilon_options,
+#     alpha_options
+# ))
+
+# # Convert the list of combinations into a list of dictionaries for configurations
+# hdbscan_configs = [
+#     {
+#         "min_cluster_size": combination[0],
+#         "min_samples": combination[1],
+#         "cluster_selection_epsilon": combination[2],
+#         "alpha": combination[3],
+#         "cluster_selection_method": 'leaf'
+#     }
+#     for combination in search_space
+# ]
+# print("Number of combinations:", len(hdbscan_configs))
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Search space for picking configs based on coherence and diversity
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# First two original configs that had good performance during tests, the rest added based on dbcv_score, 
+# days without clusters and number of clusters per day
+hdbscan_configs = [
+    {
+    "min_cluster_size": 2,
+    "min_samples": 20,
+    "cluster_selection_epsilon": 0.1,
+    "alpha": 1.2,
+    "cluster_selection_method": 'leaf'
+    },
+    {
+    "min_cluster_size": 5,
+    "min_samples": 20,
+    "cluster_selection_epsilon": 0.1,
+    "alpha": 1.2,
+    "cluster_selection_method": 'leaf'
+    },
+    {
+    "min_cluster_size": 10,
+    "min_samples": 10,
+    "cluster_selection_epsilon": 0.2,
+    "alpha": 1.2,
+    "cluster_selection_method": 'leaf'
+    },
+    {
+    "min_cluster_size": 10,
+    "min_samples": 5,
+    "cluster_selection_epsilon": 0.2,
+    "alpha": 1.2,
+    "cluster_selection_method": 'leaf'
+    }
+]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Set get_tf_idf = True if you want to generate the TF_IDF values
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+get_tf_idf = True 
+get_dbcv = False
+verbose = False
+cluster_df_list = []
+config_statistics_list = []
+
+for curr_json in original_experiments: #experiment_jsons
+    umap_emb_with_id = load_experiment_objects(experiment_jsons = [curr_json], 
+                            file_path_key = "umap_embeddings_save_location")[0]
+    
+    tweets_df = prepare_clustering_data(curr_json, umap_emb_with_id, dataframe_columns)
+    
+    # Filter based on period where there is enough data for clustering
+    tweets_df = tweets_df[tweets_df['date']>=start_date]
+    
+    # Group tweets on daily level
+    grouped_tweets = tweets_df.groupby('date')
+    
+    global_vectorizer = None
+
+    if get_tf_idf:
+        # Vectorizer setup
+        global_vectorizer = TfidfVectorizer(stop_words=combined_stop_words, max_features=5000,
+                                    max_df=0.05, min_df=10, sublinear_tf=True, ngram_range = (1,3))
+        global_vectorizer.fit(tweets_df['full_text'])
+    
+    # Representation setup - for now just take top_n words
+    top_n = 10
+    
+    for hdbscan_config in tqdm(hdbscan_configs):    
+        clusters_df, statistics = perform_clustering(grouped_tweets = grouped_tweets, 
+                                         hdbscan_config = hdbscan_config, 
+                                         global_vectorizer = global_vectorizer, 
+                                         top_n = 10,
+                                         get_tf_idf = get_tf_idf,
+                                         get_dbcv = get_dbcv,            
+                                         verbose = verbose)
+        cluster_df_list.append(clusters_df)
+        
+        if get_tf_idf:
+            print("Example of top words for a tweet cluster: ", clusters_df["TF-IDF"][0])
+            print("Example of scores for the top words of a tweet cluster: ", clusters_df["TF-IDF-score"][0])        
+
+        statistics_row = hdbscan_config.copy()
+        statistics_row.update(statistics)
+        config_statistics_list.append(statistics_row)
+#         # ADD FUNCTION THAT SAVES THE CLUSTER_DF AS WELL AS THE EXPERIMENT DETAILS
+#         # EXPAND THE PREVIOUS JSON WITH 1. CLUSTERING CONFIG AND DETAILS 2. REPRESENTATION CONFIG AND DETAILS
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+config_statistics_list
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+statistics_df = pd.DataFrame(config_statistics_list)
+statistics_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+cluster_df_list[3]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import warnings
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
+from scipy.sparse import csr_matrix
+
+warnings.filterwarnings('ignore')
+
+def apply_scores_to_tfidf(tfidf_matrix, scores, use_scores=True):
+    """Apply the TF-IDF scores to the TF-IDF matrix if use_scores is True."""
+    if use_scores:
+        scores_column = np.array(scores).reshape(-1, 1)
+        weighted_matrix = tfidf_matrix.multiply(scores_column)
+    else:
+        weighted_matrix = tfidf_matrix  # Use the TF-IDF matrix as is without weighting
+    return weighted_matrix
+
+def calculate_centroid(tfidf_matrix):
+    """Calculate the centroid of a TF-IDF matrix, weighted or not."""
+    # Check if the input is a sparse matrix
+    if isinstance(tfidf_matrix, csr_matrix):
+        centroid = tfidf_matrix.mean(axis=0)
+        centroid = centroid.A.ravel()  # Convert to dense array using .A and flatten
+    else:
+        # The input is already a dense matrix or ndarray
+        centroid = np.mean(tfidf_matrix, axis=0)
+        if isinstance(centroid, np.matrix):
+            centroid = centroid.A1  # Convert np.matrix to np.array if necessary
+    return centroid
+
+def calculate_coherence(tfidf_matrix):
+    """Calculate the coherence of a cluster using pairwise cosine similarity."""
+    pairwise_sim = cosine_similarity(tfidf_matrix)
+    upper_triangle = pairwise_sim[np.triu_indices_from(pairwise_sim, k=1)]
+    coherence = np.mean(upper_triangle)
+    return coherence
+
+def calculate_diversity(centroids):
+    """Calculate the diversity among clusters using pairwise cosine distance."""
+    pairwise_dist = 1 - cosine_similarity(centroids)
+    upper_triangle = pairwise_dist[np.triu_indices_from(pairwise_dist, k=1)]
+    diversity = np.mean(upper_triangle)
+    return diversity
+
+# Function to iterate through dataframes and calculate metrics
+def analyze_clusters(cluster_df_list, global_vectorizer, use_scores=True):
+    for cluster_df in cluster_df_list:
+        daily_coherence_scores = []
+        daily_diversity_scores = []
+
+        for date, clusters_on_date in tqdm(cluster_df.groupby('Date')):
+            daily_centroids = []
+            coherence_scores = []
+
+            for _, cluster in clusters_on_date.iterrows():
+                top_words = cluster['TF-IDF']
+                top_scores = cluster['TF-IDF-score']
+                tfidf_matrix = global_vectorizer.transform(top_words)
+                weighted_tfidf_matrix = apply_scores_to_tfidf(tfidf_matrix, top_scores, use_scores=use_scores)
+
+                # Coherence calculation for each cluster
+                coherence = calculate_coherence(weighted_tfidf_matrix)
+                coherence_scores.append(coherence)
+
+                # Calculate centroids for diversity calculation
+                centroid = calculate_centroid(weighted_tfidf_matrix)
+                daily_centroids.append(centroid)
+
+            # Normalize the centroids and calculate diversity for the day
+            if len(daily_centroids) > 1:
+                normalized_centroids = normalize(np.vstack(daily_centroids))
+                diversity = calculate_diversity(normalized_centroids)
+            else:
+                diversity = 0  # Default to 0 if there's only one cluster or none
+
+            # Store daily scores
+            daily_coherence_scores.append(np.mean(coherence_scores))
+            daily_diversity_scores.append(diversity)
+
+        # After going through all days, print the daily averages for coherence and diversity
+        print(f"Average coherence for this configuration: {np.mean(daily_coherence_scores)}")
+        print(f"Average diversity for this configuration: {np.mean(daily_diversity_scores)}")
+
+# Example usage
+analyze_clusters(cluster_df_list, global_vectorizer, use_scores=True)  # To use scores
+#analyze_clusters(cluster_df_list, global_vectorizer, use_scores=False) # To not use scores
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Comment out if rerunning the experiments for basic statistics (get_dbcv True)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Construct the full file path
+# hdbscan_experiments_file_path = os.path.join(ed_clusters_folder_path, 'testing_configs', 'clustering_metrics.csv')
+
+# # Ensure the directory exists
+# os.makedirs(os.path.dirname(hdbscan_experiments_file_path), exist_ok=True)
+
+# # Save the DataFrame to a CSV file
+# statistics_df.to_csv(hdbscan_experiments_file_path, index=False)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Tweets per day - between 50 and 1300 for most days, median and mean around 500 daily tweets
+# tweets_df.groupby("date").size().sort_values().plot(kind = "bar")
+# plt.show()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#tweets_df.head()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#cluster_df_list[0].head()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### FIX IMPORTS - BETTER VISUALISATION - Interactive and displays actual texts
+- once it works again - ADD LOOP OVER ALL CONFIG RESULTS
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import pandas as pd
+# import numpy as np
+# import plotly.express as px
+# from datetime import datetime
+
+# # Assuming clusters_df, tweets_df, and umap_df are already defined
+# # clusters_df should contain columns ["Date", "Cluster ID", "tweet_ids", "TF-IDF"] or similar
+# # tweets_df should contain columns ["tweet_id", "full_text", "umap_embedding"]
+# # Note: Adjust column names as necessary based on your actual DataFrame structures
+# clusters_df = cluster_df_list[0]
+
+# # Defining UMAP data
+# umap_df = tweets_df[["tweet_id","umap_embedding"]]
+
+# # Preparing vis_df
+# vis_df = clusters_df[["Date", "Cluster ID", "tweet_ids", "TF-IDF"]].explode("tweet_ids")
+# vis_df.rename(columns={"tweet_ids": "tweet_id"}, inplace=True)
+# vis_df = vis_df.merge(umap_df, how='left', on='tweet_id')
+# vis_df = vis_df.merge(tweets_df[["tweet_id", "full_text"]], how='left', on='tweet_id')
+
+# def visualize_tweets_by_cluster_interactive_with_outliers(vis_df, tweets_df, date="2020-04-24", outliers=True):
+#     date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+    
+#     # Adjust filtering to use the 'created_at' column, converting datetime to date
+#     daily_tweets = vis_df[pd.to_datetime(vis_df['Date']).dt.date == date_obj]
+#     all_tweets_for_date = tweets_df[pd.to_datetime(tweets_df['created_at']).dt.date == date_obj]
+     
+#     combined_df = daily_tweets.copy()
+
+#     if outliers:
+#         # Identify outliers: tweets for the day that are not in the clustered data
+#         outlier_tweet_ids = set(all_tweets_for_date['tweet_id']) - set(daily_tweets['tweet_id'])
+#         outliers_df = all_tweets_for_date[all_tweets_for_date['tweet_id'].isin(outlier_tweet_ids)].copy()
+#         outliers_df['Cluster ID'] = -1  # Assign -1 as cluster ID for outliers
+#         outliers_df['TF-IDF'] = 'Outlier'  # Placeholder cluster label for outliers
+        
+#         # Combine clustered tweets and outliers for the visualization
+#         combined_df = pd.concat([combined_df, outliers_df], ignore_index=True)
+
+#     # Extract UMAP embeddings, cluster IDs, cluster labels, and tweet texts
+#     embeddings = np.vstack(combined_df['umap_embedding'])
+#     cluster_ids = combined_df['Cluster ID']
+#     cluster_labels = combined_df['TF-IDF']
+#     tweet_texts = combined_df['full_text']
+    
+#     # Create interactive scatter plot with Plotly
+#     fig = px.scatter(x=embeddings[:, 0], y=embeddings[:, 1], color=cluster_ids.astype(str), 
+#                      hover_data=[cluster_labels, tweet_texts], 
+#                      labels={'color': 'Cluster ID', 'hover_data_0': 'Cluster Label', 'hover_data_1': 'Tweet Text'},
+#                      title=f"Tweet Clusters{' and Outliers' if outliers else ''} for {date}")
+#     fig.update_traces(marker=dict(size=5, opacity=0.7),
+#                       selector=dict(mode='markers'))
+#     fig.update_layout(xaxis_title="UMAP Dimension 1", yaxis_title="UMAP Dimension 2",
+#                       coloraxis_colorbar=dict(title="Cluster ID"))
+#     fig.show()
+
+# # UPDATE WITH LOOPING OVER CONFIGS 
+# # Example usage with your date, including outliers
+# date = '2020-04-24'
+# visualize_tweets_by_cluster_interactive_with_outliers(vis_df, tweets_df, date, outliers=True)  # With outliers
+# visualize_tweets_by_cluster_interactive_with_outliers(vis_df, tweets_df, date, outliers=False)  # Without outliers
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### TEMPORARY FIX FOR VISUALISATIONS (should add nbformat>4.2.0 to kernel)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from datetime import datetime
+from IPython.display import IFrame, HTML  # Used for displaying HTML in Jupyter
+import uuid
+
+def visualize_tweets_by_cluster_interactive_with_outliers(vis_file_path, hdbscan_config, vis_df, tweets_df, date="2020-04-24", outliers=True, display_inline=True):
+    date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+    
+    # Filter tweets by the selected date
+    daily_tweets = vis_df[pd.to_datetime(vis_df['Date']).dt.date == date_obj]
+    all_tweets_for_date = tweets_df[pd.to_datetime(tweets_df['created_at']).dt.date == date_obj]
+     
+    # Initialize combined_df with daily tweets
+    combined_df = daily_tweets.copy()
+
+    # Add outliers to combined_df if specified
+    if outliers:
+        outlier_tweet_ids = set(all_tweets_for_date['tweet_id']) - set(daily_tweets['tweet_id'])
+        outliers_df = all_tweets_for_date[all_tweets_for_date['tweet_id'].isin(outlier_tweet_ids)].copy()
+        outliers_df['Cluster ID'] = -1  # Assign -1 as cluster ID for outliers
+        outliers_df['TF-IDF'] = 'Outlier'  # Placeholder cluster label for outliers
+        combined_df = pd.concat([combined_df, outliers_df], ignore_index=True)
+
+    # Extract data for plotting
+    embeddings = np.vstack(combined_df['umap_embedding'])
+    cluster_ids = combined_df['Cluster ID']
+    cluster_labels = combined_df['TF-IDF']
+    tweet_texts = combined_df['full_text']
+    
+    
+    title = f"Tweet Clusters{' and Outliers' if outliers else ''} for {date}" 
+    title = title + str(hdbscan_config)
+    # Create interactive scatter plot with Plotly
+    fig = px.scatter(
+                     x=embeddings[:, 0], 
+                     y=embeddings[:, 1], 
+                     color=cluster_ids.astype(str), 
+                     hover_data=[cluster_labels, tweet_texts], 
+                     labels = {'color': 'Cluster ID'},
+                     title = title)
+    fig.update_traces(marker=dict(size=5, opacity=0.7))
+    fig.update_layout(xaxis_title="UMAP Dimension 1", yaxis_title="UMAP Dimension 2",
+                      coloraxis_colorbar=dict(title="Cluster ID"))
+    
+    # Save the plot to an HTML file
+    os.makedirs(os.path.dirname(vis_file_path), exist_ok=True)
+    fig.write_html(vis_file_path)
+    print(vis_file_path)
+    # Display the plot inline if requested
+    #if display_inline:
+        #display(IFrame(src=vis_file_path, width=800, height=600))
+        # Display the plot inline by generating a presigned URL to the file
+
+# Example usage with a specific date, including outliers
+dates = ['2020-04-24','2020-02-08','2019-12-05','2018-07-04']
+outliers = True
+for date in dates:
+    # Assuming 'cluster_df_list' is a list of cluster DataFrames and 'tweets_df' is your DataFrame containing tweet information
+     # Example usage of the first DataFrame in the list
+    for clusters_df, hdbscan_config in zip(cluster_df_list, hdbscan_configs):
+    # Prepare the visualization DataFrame (vis_df)
+        umap_df = tweets_df[['tweet_id', 'umap_embedding']]
+        vis_df = clusters_df[['Date', 'Cluster ID', 'tweet_ids', 'TF-IDF']].explode('tweet_ids')
+        vis_df.rename(columns={'tweet_ids': 'tweet_id'}, inplace=True)
+        vis_df = vis_df.merge(umap_df, how='left', on='tweet_id')
+        vis_df = vis_df.merge(tweets_df[['tweet_id', 'full_text']], how='left', on='tweet_id')
+
+        unique_id = uuid.uuid4()
+        vis_file_path = os.path.join(ed_clusters_folder_path, "visualisations",f"tweet_clusters_{date}_{unique_id}_{str(hdbscan_config)}_{'_outliers' if outliers else ''}.html")
+        visualize_tweets_by_cluster_interactive_with_outliers(vis_file_path, hdbscan_config, vis_df, tweets_df, date, outliers=outliers)  # With outliers
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Matplotlib visualisations (don't have info on individual texts, not interactive)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import json
+
+def visualize_tweets_by_cluster_matplotlib(vis_df, tweets_df, date="2020-04-24", outliers=True):
+    date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+    
+    daily_tweets = vis_df[pd.to_datetime(vis_df['Date']).dt.date == date_obj]
+    all_tweets_for_date = tweets_df[pd.to_datetime(tweets_df['created_at']).dt.date == date_obj]
+     
+    combined_df = daily_tweets.copy()
+
+    if outliers:   
+        outlier_tweet_ids = set(all_tweets_for_date['tweet_id']) - set(daily_tweets['tweet_id'])
+        outliers_df = all_tweets_for_date[all_tweets_for_date['tweet_id'].isin(outlier_tweet_ids)].copy()
+        outliers_df['Cluster ID'] = -1  # Assign -1 as cluster ID for outliers
+        outliers_df['TF-IDF'] = 'Outlier'
+        
+        combined_df = pd.concat([combined_df, outliers_df], ignore_index=True)
+        print("Proportion of outliers:", len(outliers_df)/len(combined_df))
+    
+    embeddings = np.vstack(combined_df['umap_embedding'])
+    cluster_ids = combined_df['Cluster ID']
+    # Convert cluster IDs to categorical types for color mapping
+    cluster_ids_cat = pd.Categorical(cluster_ids)
+    
+    # Create the scatter plot with matplotlib
+    fig, ax = plt.subplots()
+    scatter = ax.scatter(embeddings[:, 0], embeddings[:, 1], c=cluster_ids_cat.codes, cmap='viridis', alpha=0.7)
+    
+    # Specify the location of the legend, or use bbox_to_anchor for fine control
+    legend1 = ax.legend(*scatter.legend_elements(), title="Cluster ID", loc='upper right', bbox_to_anchor=(1.25, 1))
+    ax.add_artist(legend1)
+    
+    plt.subplots_adjust(right=1)  # Adjust the right space of the plot to fit the legend
+    
+    ax.set_title(f"Tweet Clusters{' and Outliers' if outliers else ''} for {date}")
+    ax.set_xlabel("UMAP Dimension 1")
+    ax.set_ylabel("UMAP Dimension 2")
+    
+    plt.show()
+
+# Example usage
+#dates = ['2020-04-24', '2019-12-05','2018-07-04']
+dates = ['2020-04-24','2020-02-08','2019-12-05','2018-07-04']
+for date in dates:
+    for clusters_df,hdbscan_config in zip(cluster_df_list, hdbscan_configs):
+        # Defining UMAP data
+        umap_df = tweets_df[["tweet_id","umap_embedding"]]
+
+        # Preparing vis_df
+        #vis_df = clusters_df[["Date", "Cluster ID", "tweet_ids", "TF-IDF"]].explode("tweet_ids")
+        vis_df = clusters_df[["Date", "Cluster ID", "tweet_ids"]].explode("tweet_ids")             
+        vis_df.rename(columns={"tweet_ids": "tweet_id"}, inplace=True)
+        vis_df = vis_df.merge(umap_df, how='left', on='tweet_id')
+        vis_df = vis_df.merge(tweets_df[["tweet_id", "full_text"]], how='left', on='tweet_id')
+        #for date in dates:
+        print("VISUALISATIONS FOR CONFIG", json.dumps(hdbscan_config, indent =3))
+        visualize_tweets_by_cluster_matplotlib(vis_df, tweets_df, date, outliers=False)  # Without outliers 
+        visualize_tweets_by_cluster_matplotlib(vis_df, tweets_df, date, outliers=True)  # With outliers
+        #print(f"Proportion of outliers (globally): ",1-(len(vis_df)/len(tweets_df)))
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# print(f"Proportion of outliers (globally): ",1-(len(vis_df)/len(tweets_df)))
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Old approach using local TF-IDF scores instead of global 
+# cluster_results = []
+
+# hdbscan_config = {
+#     "min_cluster_size": 15,
+#     "min_samples": None,
+#     "cluster_selection_epsilon": 0.0,
+#     "alpha": 1.0,
+#     "cluster_selection_method": 'eom'
+# }
+
+# for date, group in grouped_tweets:
+#     day_embeddings = np.array(list(group['umap_embedding']))
+
+#     # Perform HDBSCAN clustering
+#     start_time = time.time()
+#     print("HDBSCAN Start Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
+
+#     clusterer = hdbscan.HDBSCAN(**hdbscan_config)
+#     cluster_labels = clusterer.fit_predict(day_embeddings)
+
+#     end_time = time.time()
+#     print("HDBSCAN End Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
+
+#     time_taken_minutes = (end_time - start_time) / 60
+#     print("Time taken for HDBSCAN:", time_taken_minutes, "minutes")
+
+#     # Process each cluster
+#     for cluster_id in np.unique(cluster_labels):
+#         if cluster_id == -1:
+#             continue  # Skip noise points
+
+#         cluster_tweets = group[cluster_labels == cluster_id]
+
+#         # Calculate TF-IDF
+#         vectorizer = TfidfVectorizer(stop_words=combined_stop_words, max_features=10)
+#         tfidf_matrix = vectorizer.fit_transform(cluster_tweets['full_text'])
+#         top_words = vectorizer.get_feature_names_out()
+
+#         # Store the results
+#         cluster_results.append({
+#             "Date": date,
+#             "Cluster ID": cluster_id,
+#             "tweet_ids": cluster_tweets['tweet_id'].tolist(),
+#             "TF-IDF": top_words
+#         })
+
+# clusters_df = pd.DataFrame(cluster_results)

@@ -1,0 +1,289 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import pickle
+from datetime import datetime
+import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModel
+from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
+#import GPUtil
+import os
+import json
+from datetime import datetime
+import time
+from sentence_transformers import SentenceTransformer
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from utils import (
+    select_gpu_with_most_free_memory,
+    parse_timestamp,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+device = select_gpu_with_most_free_memory()
+print(f"Using device: {device}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+preprocessed_data = dataiku.Folder("PpRdk4F7")
+preprocessed_data_path = preprocessed_data.get_path()
+
+experiment_jsons = load_experiment_jsons(preprocessed_data_path, 
+                                         dataset_name = "", 
+                                         experiment_details_subfolder="preprocessing_steps",
+                                        )
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+tweets_cleaned_dataframes = load_experiment_objects(experiment_jsons = experiment_jsons, 
+                                             file_path_key = "dataset_location")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+tweets_cleaned_df = tweets_cleaned_dataframes[0]
+tweets_cleaned_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#tweets_cleaned_df = tweets_cleaned_df[:2048]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Function for generating sentence level embeddings manually - first made for 'intfloat/multilingual-e5-large'
+# def generate_embeddings(tweets_df, embedding_config, text_column = "full_text"):
+#     tweets = tweets_df['full_text'].apply(str).tolist()
+#     device = select_gpu_with_most_free_memory()
+#     model_name = embedding_config["model_name"]
+#     batch_size = embedding_config["batch_size"]
+    
+#     tokenizer = AutoTokenizer.from_pretrained(model_name)
+#     model = AutoModel.from_pretrained(model_name)
+#     model.eval()
+#     model.to(device)
+    
+#     # Tokenize and encode the texts
+#     batch_dict = tokenizer(tweets, padding=True, truncation=True, return_tensors='pt', max_length=512)
+    
+#     # Create a TensorDataset and DataLoader
+#     dataset = TensorDataset(batch_dict['input_ids'], batch_dict['attention_mask'])
+#     loader = DataLoader(dataset, batch_size = batch_size, num_workers=4)  # Adjust batch_size and workers as needed
+    
+#     sentence_embeddings = []
+
+#     with torch.no_grad():
+#         for batch in tqdm(loader, desc="Calculating embeddings"):
+#             input_ids, attention_mask = [b.to(device) for b in batch]
+#             outputs = model(input_ids, attention_mask=attention_mask)
+#             batch_embeddings = outputs.last_hidden_state
+
+#             # Perform average pooling for each batch
+#             mean_batch_embeddings = average_pool(batch_embeddings, attention_mask)
+
+#             # Append the processed embeddings of the batch
+#             sentence_embeddings.append(mean_batch_embeddings.cpu())
+
+#     # Concatenate all batch embeddings
+#     sentence_embeddings = torch.cat(sentence_embeddings, dim=0)
+#     return sentence_embeddings
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Function to perform average pooling
+def average_pool(last_hidden_states, attention_mask):
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+# Function for the manual process of generating embeddings
+def generate_embeddings_manual(tweets, embedding_config):
+    device = select_gpu_with_most_free_memory()
+    model_name = embedding_config["model_name"]
+    batch_size = embedding_config["batch_size"]
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).to(device)
+    model.eval()
+    
+    batch_dict = tokenizer(tweets, padding=True, truncation=True, return_tensors='pt', max_length=512)
+    dataset = TensorDataset(batch_dict['input_ids'], batch_dict['attention_mask'])
+    loader = DataLoader(dataset, batch_size=batch_size, num_workers=4)
+    
+    sentence_embeddings = []
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Calculating embeddings"):
+            input_ids, attention_mask = [b.to(device) for b in batch]
+            outputs = model(input_ids, attention_mask=attention_mask)
+            batch_embeddings = outputs.last_hidden_state
+            
+            mean_batch_embeddings = average_pool(batch_embeddings, attention_mask)
+            sentence_embeddings.append(mean_batch_embeddings.cpu())
+    
+    return torch.cat(sentence_embeddings, dim=0)
+
+# Function for generating embeddings using SentenceTransformer
+def generate_embeddings_sentence_transformer(tweets, embedding_config):
+    model_name = embedding_config["model_name"]
+    batch_size = embedding_config.get("batch_size", 256)
+    
+    device = select_gpu_with_most_free_memory()
+    model = SentenceTransformer(model_name)
+    model = model.to(device)
+    
+    embeddings = model.encode(tweets, batch_size=batch_size, show_progress_bar=True)
+    return torch.tensor(embeddings)
+
+# Main function to decide which embedding generation process to use
+def generate_embeddings(tweets_df, embedding_config, text_column="full_text"):
+    tweets = tweets_df[text_column].apply(str).tolist()
+    model_name = embedding_config["model_name"]
+
+    if "sentence-transformers" in model_name:
+        return generate_embeddings_sentence_transformer(tweets, embedding_config)
+    else:
+        return generate_embeddings_manual(tweets, embedding_config)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def save_embeddings_and_config(sentence_embeddings, tweets_df, embedding_config, preprocessing_details, root_folder_path, id_column = "tweet_id"):
+    tweet_ids = tweets_df[id_column].tolist()
+    folder_path = root_folder_path
+    
+    # Prepare subfolder paths
+    embeddings_subfolder_path = os.path.join(folder_path, "embeddings")
+    experiment_details_subfolder_path = os.path.join(folder_path, "experiment_details")
+    os.makedirs(embeddings_subfolder_path, exist_ok=True)
+    os.makedirs(experiment_details_subfolder_path, exist_ok=True)
+
+    unix_timestamp, current_time = get_current_time_and_unix_timestamp()
+
+    # To avoid issue with directory system
+    model_name = embedding_config["model_name"].replace("/", "-")
+    embeddings_file_name = f"{model_name}_embeddings_{current_time}.pkl"
+    experiment_details_file_name = f"{model_name}_embedding_details_{current_time}.json"
+
+    # Save embeddings as a Pickle file
+    embeddings_file_path = os.path.join(embeddings_subfolder_path, embeddings_file_name)
+    data_to_save = {
+        "tweet_ids": tweet_ids, 
+        "embeddings": sentence_embeddings.numpy()  # Ensure embeddings are numpy array
+    }
+    
+    with open(embeddings_file_path, 'wb') as f:
+        pickle.dump(data_to_save, f)
+
+    # Save experiment details as JSON
+    embedding_details = {
+        "embeddings_save_location": embeddings_file_path,
+        "embedding_timestamp": current_time,
+        "dimension_of_embeddings": sentence_embeddings.shape[1],
+        "num_of_embeddings": len(tweet_ids),
+    }
+    
+    # Make a copy of preprocessing_details to preserve the original
+    experiment_details = preprocessing_details.copy()
+
+    # Update the copy with additional details
+    experiment_details.update({
+        "embedding_config": embedding_config,
+        "embedding_details": embedding_details
+    })
+    
+    experiment_details_file_path = os.path.join(experiment_details_subfolder_path, experiment_details_file_name)
+    with open(experiment_details_file_path, 'w') as json_file:
+        json.dump(experiment_details, json_file, indent=4)
+
+    print(f"Embeddings and experiment details saved successfully in {folder_path}.")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import gc
+# Load pre-trained model tokenizer and model for 'multilingual-e5-large'
+embedding_configs = [
+    {
+        "model_name": 'intfloat/multilingual-e5-large',
+        "batch_size": 512
+    },
+    {
+        "model_name": 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+        "batch_size": 512
+    },
+    {
+        "model_name": 'sentence-transformers/sentence-t5-base',
+        "batch_size": 512
+    }
+]
+
+embedding_folder = dataiku.Folder("Z3UWhKIL")
+embedding_folder_path = embedding_folder.get_path()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+for current_config in embedding_configs:
+    for current_df, current_preprocessing_details in zip(tweets_cleaned_dataframes, experiment_jsons):
+        #current_df = current_df[:2048]
+        print("Generating embeddings")
+        sentence_embeddings = generate_embeddings(tweets_df = current_df, 
+                                                  embedding_config = current_config,
+                                                  text_column = "full_text", 
+                                                  )
+        print(f"Shape of sentence embeddings generated: {sentence_embeddings.shape}")   
+        print("Saving embeddings and config")
+        
+        save_embeddings_and_config(sentence_embeddings = sentence_embeddings, 
+                           tweets_df = current_df, 
+                           embedding_config = current_config,
+                           preprocessing_details = current_preprocessing_details, 
+                           root_folder_path = embedding_folder_path,
+                           id_column = "tweet_id",
+                          )
+
+        # After saving, free up memory
+        del sentence_embeddings
+        gc.collect()  # Python's Garbage Collector
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()  # Clear PyTorch's cache
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# preprocessing_details = experiment_jsons[0]
+# embedding_folder = dataiku.Folder("Z3UWhKIL")
+# embedding_folder_path = embedding_folder.get_path()
+
+# save_embeddings_and_config(sentence_embeddings = sentence_embeddings, 
+#                            tweets_df = tweets_cleaned_df, 
+#                            embedding_config = embedding_config,
+#                            preprocessing_details = preprocessing_details, 
+#                            root_folder_path = embedding_folder_path,
+#                            id_column = "tweet_id",
+#                           )
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# #Old appoach - BERT based
+# from transformers import BertTokenizer, BertModel
+# import torch
+# from torch.utils.data import DataLoader, TensorDataset
+
+# # Load pre-trained model tokenizer and model
+# tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased')
+# model = BertModel.from_pretrained('bert-base-multilingual-cased')
+
+# # Convert all elements to strings while creating the tweets list
+# tweets = tweets_cleaned_df['full_text'].apply(str).tolist()
+
+# # Tokenize and encode the texts
+# encoded_input = tokenizer(tweets, padding=True, truncation=True, return_tensors='pt', max_length=512)
+# # Assuming the rest of your code is unchanged and you have `encoded_input`
+
+# # Create a TensorDataset and DataLoader
+# dataset = TensorDataset(encoded_input['input_ids'], encoded_input['attention_mask'])
+# loader = DataLoader(dataset, batch_size=512)  # Adjust batch_size as needed
+
+# # Move your model to GPU if available
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# model.to(device)
+
+# # Process in batches and perform mean pooling
+# sentence_embeddings = []
+# with torch.no_grad():
+#     for batch in loader:
+#         input_ids, attention_mask = [b.to(device) for b in batch]
+#         outputs = model(input_ids, attention_mask=attention_mask)
+#         batch_embeddings = outputs.last_hidden_state
+
+#         # Perform mean pooling for each batch
+#         input_mask_expanded = attention_mask.unsqueeze(-1).expand(batch_embeddings.size()).float()
+#         sum_embeddings = torch.sum(batch_embeddings * input_mask_expanded, 1)
+#         sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+#         mean_batch_embeddings = sum_embeddings / sum_mask
+
+#         # Append the mean pooled embeddings of the batch
+#         sentence_embeddings.append(mean_batch_embeddings.cpu())
+
+# # Concatenate all batch embeddings
+# sentence_embeddings = torch.cat(sentence_embeddings, dim=0)

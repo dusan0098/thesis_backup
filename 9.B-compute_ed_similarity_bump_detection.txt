@@ -1,0 +1,151 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import matplotlib.pyplot as plt
+from statsmodels.nonparametric.smoothers_lowess import lowess
+from tqdm import tqdm
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+device = select_gpu_with_most_free_memory()
+print(f"Using device: {device}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Read recipe inputs
+ed_similarity_smoothing = dataiku.Dataset("ed_similarity_smoothing")
+df_input = ed_similarity_smoothing.get_dataframe()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import ast
+list_columns = ['Similarities_List', 'Similarities_List_0.01', 'Similarities_List_0.02', 'Similarities_List_0.03', 'Similarities_List_0.04', 'Similarities_List_0.05']
+for column in list_columns:
+    df_input[column] = df_input[column].apply(lambda x: [float(i) for i in ast.literal_eval(x)] if pd.notnull(x) else [])
+
+df_input.head(5)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from scipy.stats import zscore
+
+def add_zscore_scaled_column(df, column_to_scale):
+    """
+    Adds a new column to the DataFrame with Z-score scaled values of the specified column.
+    Each row in the specified column should contain a list of values representing a timeline.
+    
+    Parameters:
+    - df: The DataFrame containing the timelines.
+    - column_to_scale: The name of the column containing the timelines to be scaled.
+    
+    The new column will be named as <column_to_scale>_zscore.
+    """
+    new_column_name = f'{column_to_scale}_zscore'
+    df[new_column_name] = None  # Initialize the new column
+
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc=f"Scaling {column_to_scale}"):
+        timeline = np.array(row[column_to_scale])  # Convert the list to a NumPy array
+        if timeline.size > 0:  # Check if the timeline is not empty
+            scaled_timeline = zscore(timeline)  # Calculate Z-scores for the timeline
+            scaled_timeline = np.nan_to_num(scaled_timeline, nan=0.0)  # Handle constant timelines
+            df.at[index, new_column_name] = scaled_timeline.tolist()  # Update the DataFrame
+        else:
+            df.at[index, new_column_name] = []  # Handle empty timelines
+
+    return df
+
+
+# Example usage:
+# Assuming your DataFrame is named df and you want to scale 'Similarities_List_0.01'
+scaled_df = add_zscore_scaled_column(df_input, "Similarities_List_0.03")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from sklearn.preprocessing import minmax_scale
+
+def add_minmax_scaled_column(df, column_to_scale):
+    """
+    Adds a new column to the DataFrame with Min-Max scaled values of the specified column.
+    Each row in the specified column should contain a list of values representing a timeline.
+    
+    Parameters:
+    - df: The DataFrame containing the timelines.
+    - column_to_scale: The name of the column containing the timelines to be scaled.
+    
+    The new column will be named as <column_to_scale>_scaled.
+    """
+    new_column_name = f'{column_to_scale}_scaled'
+    df[new_column_name] = None  # Initialize the new column
+
+    for index, row in tqdm(df.iterrows(), total=df.shape[0], desc=f"Scaling {column_to_scale}"):
+        timeline = np.array(row[column_to_scale])  # Convert the list to a NumPy array
+        if timeline.size > 0:  # Check if the timeline is not empty
+            # Scale the timeline to the range [0, 1]
+            scaled_timeline = minmax_scale(timeline)
+            df.at[index, new_column_name] = scaled_timeline.tolist()  # Update the DataFrame
+        else:
+            df.at[index, new_column_name] = []  # Handle empty timelines
+
+    return df
+
+# Example usage
+# Assuming your DataFrame is named df and you want to scale 'Similarities_List_0.01'
+scaled_df = add_minmax_scaled_column(scaled_df, 'Similarities_List_0.03')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import matplotlib.pyplot as plt
+import pandas as pd
+
+def visualize_sampled_timelines(df, N, original_col, smoothed_col):
+    """
+    Visualizes randomly sampled timelines with original and LOESS-smoothed values.
+
+    Parameters:
+    - df: DataFrame containing the timelines and their smoothed versions.
+    - N: Number of timelines to randomly sample and visualize.
+    - original_col: The column name containing the original timeline values.
+    - smoothed_col: The column name containing the LOESS-smoothed timeline values.
+    """
+    # Sample N random clusters
+    sampled_clusters = df.sample(n=N, random_state=256)
+    
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = df['First_Observed_Date'].min()
+    global_end_date = df['Last_Observed_Date'].max()
+    
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    # Plotting
+    fig, axs = plt.subplots(N, figsize=(10, N * 4), squeeze=False)
+    
+    for ax, (_, row) in zip(axs.flat, sampled_clusters.iterrows()):
+        #Convert lists to Series with a proper datetime index for both original and smoothed data
+        original_timeline = pd.Series(data=row[original_col], 
+                                       index=pd.date_range(start=row['First_Observed_Date'], 
+                                                           end=row['Last_Observed_Date'])).reindex(timeline, method='pad')
+        smoothed_timeline = pd.Series(data=row[smoothed_col], 
+                                       index=pd.date_range(start=row['First_Observed_Date'], 
+                                                           end=row['Last_Observed_Date'])).reindex(timeline, method='pad')
+        
+        # Plot original and smoothed values
+        ax.plot(timeline, original_timeline, label=original_col, alpha=0.5)
+        ax.plot(timeline, smoothed_timeline, label=smoothed_col, color='blue')
+        
+        ax.set_title(f'Cluster: {row["Date"]}-{row["Cluster_ID"]}')
+        ax.set_xlabel('Observation Date')
+        ax.set_ylabel('Similarity')
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+#smoothed_col = "Similarities_List_0.03_zscore"
+smoothed_col = "Similarities_List_0.03_scaled"
+visualize_sampled_timelines(scaled_df, N=10, original_col='Similarities_List_0.03_zscore', smoothed_col= smoothed_col )
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write recipe outputs
+ed_similarity_bump_detection = dataiku.Dataset("ed_similarity_bump_detection")
+ed_similarity_bump_detection.write_with_schema(df_output)

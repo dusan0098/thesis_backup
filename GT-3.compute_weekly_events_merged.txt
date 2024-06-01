@@ -1,0 +1,212 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import ast
+import json
+import time
+from tqdm import tqdm
+from openai_utils import (
+    handle_rate_limit_error,
+    handle_json_format_error,
+)
+
+# Read recipe inputs
+weekly_event_extraction = dataiku.Dataset("weekly_event_extraction")
+event_df = weekly_event_extraction.get_dataframe()
+
+# Output of recipe 
+events_merged_dataset = dataiku.Dataset("weekly_events_merged")
+
+# Fixing lists
+event_df['representative_docs'] = event_df['representative_docs'].apply(ast.literal_eval)
+event_df['ctfidf_representation'] = event_df['ctfidf_representation'].apply(ast.literal_eval)
+event_df['keybert_representation'] = event_df['keybert_representation'].apply(ast.literal_eval)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import openai
+
+openai.api_key = "a796cd0d45604c42b9738d7900c11861"
+openai.api_base = "https://topic-representation-long.openai.azure.com/"
+openai.api_type = "azure"
+openai.api_version = '2023-05-15'
+deployment_name = 'ChatGPT-Long'
+
+openai_config = {
+            "max_tokens": 8000,
+            "temperature": 0.2 ,
+            "top_p": 0.2
+            }
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+event_df = event_df[event_df["is_event"] == True]
+event_df.head(5)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+system_message = {
+    "role": "system",
+    "content": "You are a helpful assistant. Your primary task is to analyze the provided events detected from tweets,\
+    determine redundancies, and identify the most representative topics."
+}
+
+def create_weekly_prompt(week_events):
+    events_details = []
+    for _, row in week_events.iterrows():
+        event_detail = {
+            "topic_id": row['topic_id'],
+            "event_date": row['event_date'],
+            "event_name": row['event_name'],
+            "event_description": row['event_description']
+        }
+        events_details.append(event_detail)
+        
+    prompt = f"""
+    I am providing you with a list of events detected for a specific week. These events were extracted by clustering\
+    tweets written by German politicians and then prompting GPT to determine which of the topics obtained through the \
+    clustering correspond to events and extracting details about each event.
+    Each event includes a topic_id, estimated date (event_date), title (event_name), and a short description (event_description).
+
+    Please analyze the list and identify which events are redundant or refer to the same topic. For each redundant event,\
+    specify the ID of the topic that best captures the event.
+
+    Here are the details of the events:
+    {events_details}
+
+    Important instructions:
+    - Only use the IDs provided in the list.
+    - If a topic is considered the most representative, it cannot be marked as redundant to another topic.
+    - Ensure that no `redundant_ids` lists overlap. Each redundant topic should be assigned to only one representative\
+    topic.
+
+    Based on this information, please provide your response in the following JSON format:
+
+    {{
+        "merged_topics": [
+            {{
+                "topic_id": int,  # The ID of the most representative topic
+                "redundant_ids": [int, int, ...]  # List of IDs of topics that talk about the same event as topic_id
+            }},
+            ...
+        ]
+    }}
+    """
+# Old prompt for merging redundant event topics    
+#     prompt = f"""
+#     I am providing you with a list of events detected for a specific week. These events were extracted \
+#     by clustering tweets written by German politicians and then prompting GPT to determine which of the topics obtained \
+#     through the clustering correspond to events, extracting details about each event. \
+#     Each event includes a topic_id, estimated date (event_date), title (event_name), and a short description (event_description). \
+#     Please analyze the list and identify which events are redundant or refer to the same topic. For each redundant event, \
+#     specify the ID of the topic that best captures the event.
+
+#     Here are the details of the events:
+
+#     {events_details}
+
+#     Based on this information, please provide your response in the following JSON format:
+
+#     {{
+#         "merged_topics": [
+#             {{
+#                 "topic_id": int,  # The ID of the most representative topic
+#                 "redundant_ids": [int, int, ...]  # List of IDs of topics that talk about the same event as topic_id
+#             }},
+#             ...
+#         ]
+#     }}
+#     """
+    return prompt
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def get_request_with_backoff(messages, deployment_name, openai_config, max_attempts=3):
+    for attempt in range(max_attempts):
+        try:
+            response = openai.ChatCompletion.create(
+                engine=deployment_name,
+                messages=messages,
+                **openai_config
+            )
+            content = response['choices'][0]['message']['content']
+            result = json.loads(content)
+            return result
+        except openai.error.InvalidRequestError as e:
+            if "maximum context length" in str(e):
+                print(f"Context too long in attempt {attempt + 1}.")
+            else:
+                print(f"Attempt {attempt + 1} failed. Error: {str(e)}")
+                break  # Exit the loop for invalid request errors
+        except json.decoder.JSONDecodeError as e:
+            result = handle_json_format_error(
+                current_messages=messages,
+                deployment_name=deployment_name,
+                response=response,
+                error_message=e,
+                max_attempts=max_attempts
+            )
+            return result
+        except openai.error.RateLimitError as e:
+            print(f"RateLimitError in attempt {attempt + 1}")
+            if attempt < max_attempts - 1:
+                error_message = str(e)
+                handle_rate_limit_error(error_message)
+            else:
+                print("Maximum retry attempts reached.")
+        except Exception as e:
+            print(f"Error in attempt {attempt + 1}: {str(e)}")
+            if attempt == max_attempts - 1:
+                handle_rate_limit_error(str(e))
+            else:
+                time.sleep(5)  # Wait for 5 seconds before retrying
+    return {"merged_topics": []}
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from datetime import timedelta
+# Function to process weekly events
+def process_weekly_events(week_events):
+    current_prompt = create_weekly_prompt(week_events)
+    messages = [system_message, {"role": "user", "content": current_prompt}]
+    result = get_request_with_backoff(messages, deployment_name, openai_config)
+    return result
+
+# Initialize new columns in event_df
+event_df['is_redundant'] = False
+event_df['captured_by'] = None
+
+# Process each week
+weekly_results = []
+
+# Group events by start_date and end_date
+event_df_grouped = event_df.groupby(['start_date', 'end_date'])
+
+for (start_date, end_date), week_events in tqdm(event_df_grouped, desc="Processing weeks"):
+    if not week_events.empty:        
+        # Send prompt to GPT and get the response
+        response = process_weekly_events(week_events)
+        
+                # Extract merged_topics from the response
+        merged_topics = response.get("merged_topics", [])
+        
+        for topic in merged_topics:
+            main_id = topic["topic_id"]
+            redundant_ids = topic.get("redundant_ids", [])
+            
+            # Update the is_redundant and captured_by columns in the original DataFrame
+            for redundant_id in redundant_ids:
+                event_df.loc[(event_df['topic_id'] == redundant_id) & (event_df['start_date'] == start_date), 'is_redundant'] = True
+                event_df.loc[(event_df['topic_id'] == redundant_id) & (event_df['start_date'] == start_date), 'captured_by'] = main_id
+
+            # Ensure the representative topic is not marked as redundant
+            event_df.loc[(event_df['topic_id'] == main_id) & (event_df['start_date'] == start_date), 'is_redundant'] = False
+            event_df.loc[(event_df['topic_id'] == main_id) & (event_df['start_date'] == start_date), 'captured_by'] = None
+
+        # Save response for debugging or further analysis
+        weekly_results.append({
+            "start_date": start_date,
+            "end_date": end_date,
+            "response": response
+        })
+        print(start_date, response)
+        
+# Process and save the results
+responses_df = pd.DataFrame(weekly_results)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#responses_df[["start_date","response"]].values
+#event_df[event_df["is_redundant"]]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+events_merged_dataset.write_with_schema(event_df)

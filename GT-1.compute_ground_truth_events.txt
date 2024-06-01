@@ -1,0 +1,332 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import pickle
+import os
+
+# Read recipe inputs
+ground_truth_extraction = dataiku.Folder("IxvxwMhY")
+ground_truth_extraction_path = ground_truth_extraction.get_path()
+
+tweets_file_name = "german_tweets_with_hashtags.pkl"
+tweets_full_path = os.path.join(ground_truth_extraction_path, tweets_file_name)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+with open(tweets_full_path, 'rb') as f:
+    tweets_df = pickle.load(f)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Filter out tweets prior to 2017 as they aren't used during the clustering
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Convert the 'created_at' column to datetime
+tweets_df['created_at'] = pd.to_datetime(tweets_df['created_at'])
+
+# Filter out tweets prior to 2017
+tweets_df = tweets_df[tweets_df['created_at'] >= '2017-01-01']
+
+# Reset the index of the filtered DataFrame
+tweets_df.reset_index(drop=True, inplace=True)
+tweets_df.head(5)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Setting up the Vectorizer prior to clustering - german and english stopwords
+import nltk
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import CountVectorizer
+
+german_stop_words = stopwords.words('german')
+english_stop_words = stopwords.words('english')
+twitter_words = ['rt', 'user']
+
+combined_stop_words = list(set(english_stop_words + german_stop_words + twitter_words))
+
+vectorizer_model = CountVectorizer(stop_words = combined_stop_words, ngram_range = (1,3), max_df = 0.5, min_df = 2)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+from datetime import timedelta
+from umap import UMAP
+from hdbscan import HDBSCAN
+from sentence_transformers import SentenceTransformer
+from bertopic import BERTopic
+from bertopic.representation import KeyBERTInspired
+from bertopic.vectorizers import ClassTfidfTransformer
+
+umap_model = UMAP(n_neighbors=15, n_components=2, min_dist=0.0, metric='cosine')
+
+hdbscan_model = HDBSCAN(min_cluster_size=30, #15 
+                        min_samples = 20, #10
+                        cluster_selection_method='leaf', 
+                        prediction_data= False)
+
+embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+# Step 5 - Create topic representation
+ctfidf_model = ClassTfidfTransformer()
+
+# Step 6 - (Optional) Fine-tune topic representations with 
+# a `bertopic.representation` model
+keybert_model = KeyBERTInspired()
+
+# Add all models together to be run in a single `fit`
+representation_model = {
+   #"Main": ctfidf_model,
+   "keybert_based": keybert_model, 
+}
+
+# Limit on number of clusters in each period
+max_clusters_per_week = 35
+
+# Number of terms to be extracted for each representation
+nr_repr_terms = 10
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+from datetime import timedelta
+import time
+from tqdm import tqdm
+
+# Ensure 'created_at' is in datetime format
+tweets_df['created_at'] = pd.to_datetime(tweets_df['created_at'])
+
+# Determine the min and max date in tweets_df
+min_date = tweets_df['created_at'].min().normalize()
+max_date = tweets_df['created_at'].max().normalize()
+
+print(f"Min date: {min_date}, Max date: {max_date}")
+
+all_results = []
+
+# Create a list of week start dates
+week_start_dates = pd.date_range(start=min_date, end=max_date, freq='W-MON')
+
+# Number of tweets collected for each cluster nr_repr_docs
+nr_repr_docs = 10
+
+# Loop over each week from min_date to max_date using tqdm for progress bar
+for start_date in tqdm(week_start_dates, desc="Clustering over weeks"):
+    week_end_date = (start_date + timedelta(weeks=1)).normalize()
+    
+    # Filter tweets for the current week
+    weekly_tweets = tweets_df[(tweets_df['created_at'] >= start_date) & (tweets_df['created_at'] < week_end_date)]
+    
+    # Check if there are any tweets in the current week
+    if not weekly_tweets.empty:
+        # Extract the text data and tweet IDs from the filtered tweets
+        docs = weekly_tweets['full_text'].tolist()
+        tweet_ids = weekly_tweets['tweet_id'].tolist()
+        
+        # Print the start time of clustering
+        start_time = time.time()
+        print(f"Clustering started for period: {start_date} to {week_end_date}, time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(start_time))}")
+        
+        # Initialize BERTopic model for this week
+        topic_model = BERTopic(
+            embedding_model=embedding_model,                 
+            umap_model=umap_model,                    
+            hdbscan_model=hdbscan_model,
+            vectorizer_model=vectorizer_model,        
+            ctfidf_model=ctfidf_model,                
+            representation_model=representation_model 
+        )
+        
+        # Run BERTopic on the weekly tweets
+        topics, probs = topic_model.fit_transform(docs)
+        
+        # Extract topic information and filter the necessary columns
+        topic_info = topic_model.get_topic_info()
+              
+        # If there are too many clusters in a given week
+        # 1. Reduce to max_clusters
+        # 2. Update the representations (not necessary if we keep the exact same setup, reduce will 
+        # trigger new representations)
+        #       topic_model.update_topics(docs, 
+        #                               vectorizer_model=vectorizer_model,        
+        #                               ctfidf_model=ctfidf_model,                
+        #                               representation_model=representation_model,
+        #                               top_n_words = nr_repr_terms)
+        if len(topic_info) > (max_clusters_per_week + 1):
+            print("REDUCTION")
+            print(f"Reducing the number of topics from {len(topic_info)-1} to {max_clusters_per_week}")
+            topic_model.reduce_topics(docs, nr_topics=max_clusters_per_week + 1)
+            # Add update_topics here if you wish
+            topics, probs = topic_model.topics_, topic_model.probabilities_
+            topic_info = topic_model.get_topic_info()
+            print(f"New number of topics: {len(topic_info)-1}")
+              
+        topic_info = topic_info[topic_info['Topic'] != -1]  # Ignore outliers
+        
+        topic_info = topic_info[['Topic', 'Representation', 'keybert_based']]
+              
+        topic_info.rename(columns={
+            'Topic': 'topic_id',
+            'Representation': 'ctfidf_representation',
+            'keybert_based': 'keybert_representation',
+        }, inplace=True)
+        
+        # Add the start_date and end_date columns to each row
+        topic_info.insert(0, 'start_date', start_date)
+        topic_info.insert(1, 'end_date', week_end_date)
+
+        # Add an empty representative_docs column
+        topic_info['representative_docs'] = None
+
+        # Create a DataFrame with documents, IDs, and topics
+        documents = pd.DataFrame({
+            "Document": docs,
+            "ID": range(len(docs)),
+            "Topic": topics
+        })
+        
+        # Extract the top 50 representative documents
+        repr_docs, _, _, _ = topic_model._extract_representative_docs(
+            c_tf_idf=topic_model.c_tf_idf_,
+            documents=documents,
+            topics=topic_model.topic_representations_,
+            nr_repr_docs = nr_repr_docs
+        )
+        
+        # Add representative documents to the topic_info DataFrame
+        topic_info['representative_docs'] = topic_info['topic_id'].apply(lambda x: repr_docs.get(x, []))
+              
+        # Create a dictionary to map topics to tweet IDs
+        topic_to_tweet_ids = {topic_id: [] for topic_id in topic_info['topic_id']}
+        for idx, topic in enumerate(topics):
+            if topic != -1:
+                topic_to_tweet_ids[topic].append(tweet_ids[idx])
+        
+        # Add tweet IDs and representative docs to the topic_info DataFrame
+        topic_info['tweet_ids'] = topic_info['topic_id'].map(topic_to_tweet_ids)
+        
+        all_results.append(topic_info)
+        
+        # Print the end time and duration of clustering
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"Clustering ended for period: {start_date} to {week_end_date}, contains: {len(topic_info)} topics")
+        print(f"time taken: {duration:.2f} seconds")
+        #break
+              
+# Concatenate all results into a single DataFrame
+clusters_with_repr_docs = pd.concat(all_results, ignore_index=True)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import dataiku
+# import pandas as pd, numpy as np
+# from dataiku import pandasutils as pdu
+# import pickle
+# import os
+# import nltk
+# from datetime import timedelta
+# from umap import UMAP
+# from hdbscan import HDBSCAN
+# from sentence_transformers import SentenceTransformer
+# from bertopic import BERTopic
+# from bertopic.representation import KeyBERTInspired
+# from bertopic.vectorizers import ClassTfidfTransformer
+# from sklearn.feature_extraction.text import CountVectorizer
+# from concurrent.futures import ProcessPoolExecutor, as_completed
+# from multiprocessing import set_start_method
+# from tqdm import tqdm
+# import logging
+
+# # Enable logging for concurrent.futures
+# logging.basicConfig(level=logging.DEBUG)
+
+# def process_week(start_date, end_date, stop_words, max_clusters_per_week, nr_repr_docs):
+#     try:
+#         from umap import UMAP
+#         from hdbscan import HDBSCAN
+#         from sentence_transformers import SentenceTransformer
+#         from bertopic import BERTopic
+#         from bertopic.representation import KeyBERTInspired
+#         from bertopic.vectorizers import ClassTfidfTransformer
+#         from sklearn.feature_extraction.text import CountVectorizer
+
+#         weekly_tweets = tweets_df[(tweets_df['created_at'] >= start_date) & (tweets_df['created_at'] < end_date)]
+
+#         if not weekly_tweets.empty:
+#             docs = weekly_tweets['full_text'].tolist()
+#             tweet_ids = weekly_tweets['tweet_id'].tolist()
+
+#             start_time = time.time()
+#             print(f"Clustering started for period: {start_date} to {end_date}, time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(start_time))}")
+
+#             topic_model = BERTopic(
+#                 embedding_model=SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2"),
+#                 umap_model=UMAP(n_neighbors=15, n_components=2, min_dist=0.0, metric='cosine'),
+#                 hdbscan_model=HDBSCAN(min_cluster_size=30, min_samples=20, cluster_selection_method='leaf', prediction_data=False),
+#                 vectorizer_model=CountVectorizer(stop_words=stop_words, ngram_range=(1, 3), max_df=0.5, min_df=2),
+#                 ctfidf_model=ClassTfidfTransformer(),
+#                 representation_model={"keybert_based": KeyBERTInspired()}
+#             )
+
+#             topics, probs = topic_model.fit_transform(docs)
+#             topic_info = topic_model.get_topic_info()
+
+#             if len(topic_info) > (max_clusters_per_week + 1):
+#                 print(f"Reducing the number of topics from {len(topic_info) - 1} to {max_clusters_per_week}")
+#                 topic_model.reduce_topics(docs, nr_topics=max_clusters_per_week + 1)
+#                 topics, probs = topic_model.topics_, topic_model.probabilities_
+#                 topic_info = topic_model.get_topic_info()
+#                 print(f"New number of topics: {len(topic_info) - 1}")
+
+#             topic_info = topic_info[topic_info['Topic'] != -1]
+#             topic_info = topic_info[['Topic', 'Representation', 'keybert_based']]
+#             topic_info.rename(columns={
+#                 'Topic': 'topic_id',
+#                 'Representation': 'ctfidf_representation',
+#                 'keybert_based': 'keybert_representation',
+#             }, inplace=True)
+
+#             topic_info.insert(0, 'start_date', start_date)
+#             topic_info.insert(1, 'end_date', end_date)
+#             topic_info['representative_docs'] = None
+
+#             documents = pd.DataFrame({
+#                 "Document": docs,
+#                 "ID": range(len(docs)),
+#                 "Topic": topics
+#             })
+
+#             repr_docs, _, _, _ = topic_model._extract_representative_docs(
+#                 c_tf_idf=topic_model.c_tf_idf_,
+#                 documents=documents,
+#                 topics=topic_model.topic_representations_,
+#                 nr_repr_docs=nr_repr_docs
+#             )
+
+#             topic_info['representative_docs'] = topic_info['topic_id'].apply(lambda x: repr_docs.get(x, []))
+#             topic_to_tweet_ids = {topic_id: [] for topic_id in topic_info['topic_id']}
+
+#             for idx, topic in enumerate(topics):
+#                 if topic != -1:
+#                     topic_to_tweet_ids[topic].append(tweet_ids[idx])
+
+#             topic_info['tweet_ids'] = topic_info['topic_id'].map(topic_to_tweet_ids)
+
+#             end_time = time.time()
+#             duration = end_time - start_time
+#             print(f"Clustering ended for period: {start_date} to {end_date}, contains: {len(topic_info)} topics")
+#             print(f"time taken: {duration:.2f} seconds")
+
+#             return topic_info
+#     except Exception as e:
+#         print(f"Error processing week {start_date} to {end_date}: {e}")
+#         raise
+
+# # Set the start method to 'spawn' to avoid CUDA re-initialization issues
+# set_start_method('spawn', force=True)
+
+# # Use ProcessPoolExecutor to parallelize the weekly clustering
+# with ProcessPoolExecutor() as executor:
+#     futures = [executor.submit(process_week, start_date, (start_date + timedelta(weeks=1)).normalize(), combined_stop_words, max_clusters_per_week, nr_repr_docs) for start_date in week_start_dates]
+#     all_results = [future.result() for future in tqdm(as_completed(futures), total=len(futures), desc="Processing weeks")]
+
+# # Concatenate all results into a single DataFrame
+# clusters_with_repr_docs = pd.concat(all_results, ignore_index=True)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#tweet_ids, topics
+#all_results[0]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+topic_model.get_topic_info()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+weekly_clusters = dataiku.Dataset("weekly_clusters_with_docs")
+weekly_clusters.write_with_schema(clusters_with_repr_docs)

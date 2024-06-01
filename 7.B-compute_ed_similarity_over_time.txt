@@ -1,0 +1,117 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+
+# Read recipe inputs
+cluster_similarity_scores = dataiku.Dataset("ed_cluster_similarity_scores")
+similarity_scores_df = cluster_similarity_scores.get_dataframe()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+similarity_scores_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Assuming 'similarity_scores' is your existing DataFrame
+# Create a new DataFrame with reversed dates and cluster IDs
+print("Adding symmetric scores (A,B)=>(B,A)")
+reversed_similarity_scores_df = similarity_scores_df.copy()
+reversed_similarity_scores_df.rename(columns={'date_1': 'temp_date', 'date_2': 'date_1', 'Cluster_ID_1': 'temp_cluster', 'Cluster_ID_2': 'Cluster_ID_1'}, inplace=True)
+reversed_similarity_scores_df.rename(columns={'temp_date': 'date_2', 'temp_cluster': 'Cluster_ID_2'}, inplace=True)
+
+similarity_scores_df = pd.concat([similarity_scores_df, reversed_similarity_scores_df], ignore_index=True)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Sanity check - some dates were previously missing
+
+# grouped_data = similarity_scores.groupby(['date_1', 'Cluster_ID_1'])
+# # Debugging: Print out the range of 'Observation_Date' for each cluster
+# for (date, cluster_id), group in grouped_data:
+#     print(f"Cluster {cluster_id} on {date} has observation dates: {len(group['date_2'].unique())}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from tqdm import tqdm
+import pandas as pd
+
+# Assuming 'similarity_scores' is your DataFrame
+# No need to initialize an empty list
+
+# Use the .agg() function to calculate all metrics at once
+# This approach eliminates the explicit for-loop, leveraging groupby and agg for efficiency
+cluster_similarity_stats_df = similarity_scores_df.groupby(['date_1', 'Cluster_ID_1', 'date_2'])['similarity'].agg(
+    Max_Similarity='max',
+    Min_Similarity='min',
+    Average_Similarity='mean',
+    Median_Similarity='median'
+).reset_index().rename(columns={'date_1': 'Date', 'Cluster_ID_1': 'Cluster_ID', 'date_2': 'Observation_Date'})
+
+# The result is already a DataFrame, so there's no need to convert from a list to a DataFrame
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+cluster_similarity_stats_df
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write recipe outputs
+similarity_over_time = dataiku.Dataset("ed_similarity_over_time")
+similarity_over_time.write_with_schema(cluster_similarity_stats_df)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import matplotlib.pyplot as plt
+import random
+
+# Set the random seed for reproducibility
+random.seed(0)
+
+# Assuming 'cluster_similarity_stats' is your DataFrame
+# Randomly sample 10 unique clusters
+vis_df = cluster_similarity_stats_df
+unique_clusters = vis_df[['Date', 'Cluster_ID']].drop_duplicates()
+sampled_clusters = unique_clusters.sample(n=10)
+
+vis_df['Observation_Date'] = pd.to_datetime(vis_df['Observation_Date'])
+# Plotting each cluster in a separate graph
+for _, row in sampled_clusters.iterrows():
+    date, cluster_id = row['Date'], row['Cluster_ID']
+    cluster_data = vis_df[(vis_df['Date'] == date) & (vis_df['Cluster_ID'] == cluster_id)]
+    plt.figure(figsize=(10, 6))
+    plt.plot(cluster_data['Observation_Date'], cluster_data['Max_Similarity'], marker='o')
+    
+    #start_date = pd.Timestamp('2019-12-01')
+    #end_date = pd.Timestamp('2020-04-24')
+    plt.xlim(cluster_data['Observation_Date'].min(), cluster_data['Observation_Date'].max())
+    
+    plt.xlabel('Observation Date')
+    plt.ylabel('Max Similarity')
+    plt.title(f'Max Similarity Score Changes Over Time\nCluster {cluster_id} ({date})')
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# from tqdm import tqdm
+
+# # Initialize a list to store the results
+# cluster_similarity_stats = []
+
+# # Group by 'date_1' and 'Cluster_ID_1'
+# grouped_data = similarity_scores.groupby(['date_1', 'Cluster_ID_1'])
+
+# # Calculate the metrics for each group against all other days
+# for (date, cluster_id), group in tqdm(grouped_data, desc="Calculating Cluster Similarity Stats"):
+#     for observation_date in group['date_2'].unique():
+#         sub_group = group[group['date_2'] == observation_date]
+#         max_similarity = sub_group['Similarity'].max()
+#         min_similarity = sub_group['Similarity'].min()
+#         average_similarity = sub_group['Similarity'].mean()
+#         median_similarity = sub_group['Similarity'].median()
+
+#         # Append results to the list
+#         cluster_similarity_stats.append({
+#             'Date': date,
+#             'Cluster_ID': cluster_id,
+#             'Observation_Date': observation_date,
+#             'Max_Similarity': max_similarity,
+#             'Min_Similarity': min_similarity,
+#             'Average_Similarity': average_similarity,
+#             'Median_Similarity': median_similarity
+#         })
+
+# # Convert the list to a DataFrame
+# cluster_similarity_stats_df = pd.DataFrame(cluster_similarity_stats)
+
+# # 'cluster_similarity_stats_df' now contains the max, average, and median similarity for each cluster per day, against all other days.

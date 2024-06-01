@@ -1,0 +1,350 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Preprocessing Tweets
+'''
+1. Remove all URLs
+2. Replace mentions @some_user with @user if user is not known or full name (from politician metadata)
+if user is known.
+3. Remove hashtags - SO FAR NOT DONE
+4. Remove rows where full_text is "" or NaN
+'''
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import time
+from datetime import datetime
+import json
+import re
+import os
+import pickle
+import torch
+from event_detection.preprocess_tweets import (
+remove_urls,
+replace_mentions,
+remove_hashtags,
+remove_empty_rows,
+remove_short_tweets,
+)
+
+# Read recipe inputs
+tweets_raw = dataiku.Dataset("tweets_raw")
+df_input = tweets_raw.get_dataframe()
+
+name_mapping = dataiku.Dataset("name_username_mapping")
+mapping_df = name_mapping.get_dataframe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+local_device = select_gpu_with_most_free_memory()
+print(f"Using device: {local_device}")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# LENGTH DISTRIBUTION BEFORE ANY PREPROCESSING 
+# import pandas as pd
+# import matplotlib.pyplot as plt
+
+# df = df_input.copy()
+# df = df[df["full_text"].notna()]
+# # Step 1 & 2: Split text into words and count them
+# df['word_count'] = df["full_text"].apply(lambda x: len(re.split(r'\s+', x.strip())))
+
+# # Step 3: Get distribution of word counts
+# word_count_distribution = df['word_count'].value_counts().sort_index()
+
+# # Printing the distribution as a table
+# print("Word Count Distribution (Table):")
+# print(word_count_distribution)
+
+# # Step 4: Plotting the distribution
+# plt.figure(figsize=(10, 6))
+# word_count_distribution.plot(kind='bar')
+# plt.title('Distribution of Word Counts in Text Column')
+# plt.xlabel('Number of Words')
+# plt.ylabel('Frequency')
+# plt.xticks(rotation=45)
+# plt.grid(axis='y', linestyle='--', linewidth=0.7)
+# plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Example of using preprocessing functions on several columns
+#new_df = remove_urls(new_df, ['full_text', 'retweet_full_text'])
+def preprocess_tweets(df, mapping_df, config):
+    new_df = df.copy(deep=True)
+    
+    username_to_name = dict(zip(mapping_df['username'], mapping_df['name']))
+    
+    if config["remove_urls"]:
+        new_df = remove_urls(new_df, ['full_text'])
+        print("Length after remove_urls:", len(new_df))
+        
+    if config["replace_mentions"]:
+        new_df = replace_mentions(new_df, ['full_text'], username_to_name)
+        print("Length after replace_mentions:", len(new_df))
+        
+    if config["remove_hashtags"]:
+        function_config = config["remove_hashtags_config"]
+        new_df = remove_hashtags(new_df, ['full_text'], on_end_only = function_config.get("on_end_only", False))
+        print("Length after remove_hashtags:", len(new_df))
+        
+    if config["remove_empty_rows"]:
+        new_df = remove_empty_rows(new_df, ['full_text'])
+        print("Length after remove_empty_rows:", len(new_df))
+        
+    if config["remove_short_tweets"]:
+        function_config = config["remove_short_tweets_config"]
+        new_df = remove_short_tweets(new_df, ['full_text'], min_word_count = function_config.get("min_word_count",5))
+        print("Length after remove_short_tweets:", len(new_df))
+    
+    return new_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def preprocess_and_save(df_input, mapping_df, dataset_name, config, root_folder_path):
+    # Current UNIX timestamp for unique file names and readable timestamps
+    unix_timestamp, readable_timestamp = get_current_time_and_unix_timestamp()
+
+    # Applying preprocessing steps
+    processed_df = preprocess_tweets(df_input, mapping_df, config)
+    
+    columns_to_drop = ['retweeted_status', 'retweet_full_text', 'available', 'in_reply_to_user_id_str', \
+                       'followers_count', 'location']
+    
+    processed_df = processed_df.drop(columns=columns_to_drop, axis=1, errors='ignore')
+
+    # Subfolder paths within the Dataiku managed folder
+    dataset_subfolder = os.path.join(root_folder_path, "dataset")
+    os.makedirs(dataset_subfolder, exist_ok=True)
+    
+    preprocessing_steps_subfolder = os.path.join(root_folder_path, "preprocessing_steps")
+    os.makedirs(preprocessing_steps_subfolder, exist_ok=True)
+
+    # File names and paths
+    dataset_file_name = f"{dataset_name}_{unix_timestamp}.pkl"
+    preprocessing_details_file_name = f"{dataset_name}_details_{unix_timestamp}.json"
+    
+    dataset_path = os.path.join(dataset_subfolder, dataset_file_name)
+    preprocessing_details_path = os.path.join(preprocessing_steps_subfolder, preprocessing_details_file_name)
+
+    # Save the preprocessed DataFrame in pickle format
+    with open(dataset_path, 'wb') as f:  # Open the file in binary write mode
+        pickle.dump(processed_df, f)
+
+    # Preprocessing details including dataset name, columns, and an example row
+    preprocessing_details = {
+        "dataset_name": dataset_name,
+        "timestamp": readable_timestamp, 
+        "dataset_location": dataset_path,
+        "columns": list(processed_df.columns),
+        "example_row": json.loads(processed_df.iloc[0].to_json()),
+        "preprocessing_steps": config,
+    }
+
+    # Save preprocessing details as JSON
+    with open(preprocessing_details_path, 'w') as json_file:
+        json.dump(preprocessing_details, json_file, indent=4)
+
+    print(f"Preprocessed data and details saved successfully for {dataset_name}.")
+    return preprocessing_details
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example: Loading all JSONs for experiments that were performed
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+folder = dataiku.Folder("PpRdk4F7")
+folder_path = folder.get_path()
+
+experiment_jsons=load_experiment_jsons(
+                            root_folder_path = folder_path,
+                            dataset_name = "",
+                            experiment_details_subfolder = "preprocessing_steps")
+print(experiment_jsons)
+print(f"Number of experiments found: {len(experiment_jsons)}")
+if len(experiment_jsons)>0:
+    print("Example experiment:", json.dumps(experiment_jsons[0], indent = 4))
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example: Getting the newest JSON from a list based on a timestamp field
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Get the newest JSON based on the timestamp
+newest_json = get_newest_json(experiment_jsons, timestamp_key="timestamp")
+if newest_json:
+    print("Newest JSON:", newest_json)
+else:
+    print("No newest JSON found.")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example: Loading all objects from JSONs based on file_path field
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# experiment_objects = load_experiment_objects(experiment_jsons = experiment_jsons, 
+#                                              file_path_key = "dataset_location")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#type(experiment_objects[0])
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+get_current_time_and_unix_timestamp()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+preprocessing_combinations = [
+{
+    "remove_urls": True,
+    "replace_mentions": True,
+    "remove_hashtags": False,
+    "remove_empty_rows": True,
+    "remove_short_tweets": True,
+    "remove_short_tweets_config":{
+        "min_word_count":5
+    },
+},
+{
+    "remove_urls": True,
+    "replace_mentions": True,
+    "remove_hashtags": True,
+    "remove_hashtags_config":{
+        "on_end_only": False
+    },
+    "remove_empty_rows": True,
+    "remove_short_tweets": True,
+    "remove_short_tweets_config":{
+        "min_word_count":5
+    },
+},
+# {
+#     "remove_urls": True,
+#     "replace_mentions": False,
+#     "remove_hashtags": False,
+#     "remove_empty_rows": True
+# },
+]
+
+# Dataiku managed folder access
+output_folder = dataiku.Folder("PpRdk4F7")
+output_folder_path = output_folder.get_path()
+dataset_name = "german_tweets"
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example: Getting unique dictionaries (combinations) from a list of dicts
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Get unique combinations for preprocessing
+candidate_configs = get_unique_dictionaries(preprocessing_combinations, 
+                                            return_strings = False)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+processed_configs = [j["preprocessing_steps"] for j in experiment_jsons]
+
+new_configs = []
+for config in candidate_configs:
+    if config in processed_configs:
+        print("Config already performed:", config)
+    else:
+        new_configs.append(config)
+        
+print(f"There are {len(new_configs)} new configs:")
+print(new_configs)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+new_experiments = []
+for curr_config in new_configs:
+    print("Running preprocessing for following config:", curr_config)
+    curr_experiment = preprocess_and_save(df_input,
+                        mapping_df, 
+                        dataset_name,
+                        curr_config, 
+                        root_folder_path = output_folder_path)
+    new_experiments.append(curr_experiment)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example: Saving processed_combinations
+# - **Note** - make sure to add the new_configs to the processed_configs extracted from the old JSONs
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons.extend(new_experiments)
+save_combination_list(combination_list = experiment_jsons, 
+                       root_folder_path = output_folder_path)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Step 1: Remove URLs from the Tweets
+# def remove_urls(text):
+#     if isinstance(text,str):
+#         # Regex pattern to match URLs
+#         url_pattern = r'https?://\S+|www\.\S+'
+#         return re.sub(url_pattern, '', text)
+#     else:
+#         return text
+
+# # Apply the function to the 'full_text' column
+# df['full_text'] = df['full_text'].apply(remove_urls)
+# df['retweet_full_text'] = df['retweet_full_text'].apply(remove_urls)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Step2: Mapping Mentions to Names or @user token
+# username_to_name = dict(zip(mapping_df['username'], mapping_df['name']))
+
+# # Function to replace mentions in a tweet
+# def replace_mentions(tweet):
+#     if isinstance(tweet,str):
+#         words = tweet.split()
+#         new_words = []
+#         for word in words:
+#             if word.startswith('@'):
+#                 # Remove '@' and check if the username is known
+#                 username = word[1:]
+#                 if username in username_to_name:
+#                     # Replace with full name if known
+#                     new_words.append(username_to_name[username])
+#                 else:
+#                     # Replace with generic token '@user' if unknown
+#                     new_words.append('@user')
+#             else:
+#                 new_words.append(word)
+#         return ' '.join(new_words)
+#     else:
+#         return tweet
+
+# # Apply the function to the 'full_text' column
+# df['full_text'] = df['full_text'].apply(replace_mentions)
+# df['retweet_full_text'] = df['retweet_full_text'].apply(replace_mentions)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Comparing values from retweeted_status and retweet_full_text
+#df[df["retweeted_status"].notna() & df["retweet_full_text"].str.contains("...",regex=False)][["retweet_full_text"]]
+#df[df["retweeted_status"].notna()].loc[861692,["retweet_full_text","retweeted_status"]].values
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Checking if retweets make sense
+# # All retweets except 3 (check if retweet_full_text is NaN) have a "full_text" staring with "RT"
+
+# def is_retweet_identical(row):
+#     if pd.isna(row['retweet_full_text']):
+#         return False  # Not a retweet
+
+#     # Remove "RT @user" from full_text
+#     full_text = row['full_text']
+#     if full_text.startswith("RT @"):
+#         full_text = ' '.join(full_text.split(' ')[2:])
+
+#     # Remove trailing '...' from both texts
+#     full_text = full_text.rstrip('...')
+#     retweet_text = row['retweet_full_text'].rstrip('...')
+
+#     # Check if either text is a left substring of the other
+#     return full_text.startswith(retweet_text) or retweet_text.startswith(full_text)
+
+# # Apply the function to each row
+# df['is_retweet_identical'] = df.apply(is_retweet_identical, axis=1)
+
+# df[~df["is_retweet_identical"] & df["retweet_full_text"].notna()].head()
+# #df[df["is_retweet_identical"]]

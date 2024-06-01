@@ -1,0 +1,141 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import matplotlib.pyplot as plt
+from statsmodels.nonparametric.smoothers_lowess import lowess
+from tqdm import tqdm
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+device = select_gpu_with_most_free_memory()
+print(f"Using device: {device}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Read recipe inputs
+ed_similarity_over_time = dataiku.Dataset("ed_similarity_over_time")
+df_input = ed_similarity_over_time.get_dataframe()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# df = ed_similarity_over_time_df
+# # Determine the expected date range
+# start_date = df['Observation_Date'].min()
+# end_date = df['Observation_Date'].max()
+# expected_dates = pd.date_range(start=start_date, end=end_date)
+
+# # Identify the unique dates present
+# unique_dates = pd.to_datetime(df['Observation_Date'].unique())
+
+# # Find the missing dates
+# missing_dates = expected_dates.difference(unique_dates)
+
+# # Print the missing dates
+# print("Missing Dates:")
+# print(missing_dates)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Filtering due to missing dates")
+start_date = '2018-01-01'
+df_input = df_input[(pd.to_datetime(df_input['Date']) >= start_date) & (pd.to_datetime(df_input['Observation_Date']) >= start_date)]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_sorted = df_input.sort_values(by=['Date', 'Cluster_ID', 'Observation_Date'])
+
+timeline_df = df_sorted.groupby(['Date', 'Cluster_ID']).agg(
+    Similarities_List=('Max_Similarity', list),
+    First_Observed_Date=('Observation_Date', 'min'),
+    Last_Observed_Date=('Observation_Date', 'max')
+).reset_index()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# ADAPT THIS CODE TO USE THE NEW TIMELINE_DF/SMOOTH_TIMELINE_DF INSTEAD OF CONSTRUCTING IT FROM SCRATCH
+def visualize_loess_smoothing(aggregated_df, N, alpha):
+    # Sample N random clusters
+    sampled_clusters = aggregated_df.sample(n=N)
+    
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = aggregated_df['First_Observed_Date'].min()
+    global_end_date = aggregated_df['Last_Observed_Date'].max()
+    
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    # Plotting
+    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+    
+    if N == 1:
+        axs = [axs]  # Make sure axs is iterable for a single plot
+    
+    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+        # Convert Max_Similarities list to a Series with a proper datetime index
+        cluster_timeline = pd.Series(data=row['Max_Similarities'], 
+                                     index=pd.date_range(start=row['First_Observed_Date'], 
+                                                         end=row['Last_Observed_Date']))
+        
+        # Reindex to the global timeline, filling missing days with NaN, then interpolate
+        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
+        
+        # Apply LOESS smoothing
+        smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
+        
+        # Plot original and smoothed values
+        ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
+        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+        
+        ax.set_title(f'Cluster: {row["Date"]}-{row["Cluster_ID"]}')
+        ax.set_xlabel('Observation Date')
+        ax.set_ylabel('Max Similarity')
+        ax.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+# Example usage
+visualize_loess_smoothing(timeline_df, N=10, alpha=0.03)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def add_loess_smoothed_columns_to_timeline(timeline_df, similarity_list_column, alpha_values):
+    """
+    Apply LOESS smoothing to lists of similarity values for each cluster across a list of alpha values.
+    Adds new columns with smoothed series lists to the timeline DataFrame.
+
+    Parameters:
+    - timeline_df: DataFrame with aggregated similarity lists for each cluster.
+    - similarity_list_column: The column name containing lists of similarity values to smooth.
+    - alpha_values: A list of alpha values for LOESS smoothing.
+
+    Returns:
+    - Modified timeline DataFrame with new columns for each smoothed series.
+    """
+    # Iterate over each row in timeline_df and apply LOESS smoothing
+    for alpha in alpha_values:
+        # Initialize a new column for the smoothed series
+        column_name = f'{similarity_list_column}_{alpha}'
+        timeline_df[column_name] = None  # Placeholder for list initialization
+
+    for index, row in tqdm(timeline_df.iterrows(), total=timeline_df.shape[0], desc="Smoothing"):
+        similarities = row[similarity_list_column]
+        x = np.arange(len(similarities))
+
+        for alpha in alpha_values:
+            # Apply LOESS smoothing
+            smoothed = lowess(similarities, x, frac=alpha)[:, 1]
+            
+            # Construct the column name for the smoothed series and assign the smoothed values
+            column_name = f'{similarity_list_column}_{alpha}'
+            timeline_df.at[index, column_name] = smoothed.tolist()
+
+    return timeline_df
+
+alphas = [0.01, 0.02, 0.03, 0.04, 0.05]
+smooth_timeline_df = add_loess_smoothed_columns_to_timeline(timeline_df, 'Similarities_List',alpha_values = alphas)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+smooth_timeline_df.head(6)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write recipe outputs
+ed_similarity_smoothing = dataiku.Dataset("ed_similarity_smoothing")
+ed_similarity_smoothing.write_with_schema(smooth_timeline_df)

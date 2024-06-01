@@ -1,0 +1,112 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import ast
+
+# Read recipe inputs
+German_political_tweets = dataiku.Folder("IcinfBKn")
+# Get the local path of the root of the folder
+folder_path = German_political_tweets.get_path()
+
+# Metadata about individual Counties - Land, Name, Population, Area, Demographics, Economy etc. - NOT USED
+# region_df = pd.read_pickle(folder_path + '/region_metadata_df.pickle')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Read Tweets dataset
+tweets_df = pd.read_parquet(folder_path + "/full_tweets_dataframe.parquet")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Drop rows with NaNs for 'full_text' column and reset index
+tweets_df = tweets_df.dropna(subset=['full_text']).reset_index(drop=True)
+
+# Drop rows with '' for 'fuLl_text' column and reset index
+tweets_df = tweets_df[tweets_df['full_text'] != ''].reset_index(drop=True)
+
+# Drop rows with NaNs for 'created_at' column and reset index
+tweets_df = tweets_df.dropna(subset=['created_at']).reset_index(drop=True)
+
+# Add an tweet_id using the current index
+tweets_df['tweet_id'] = tweets_df.index
+tweets_df = tweets_df.reset_index(drop=True)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Reorder columns 
+main_columns = ['tweet_id', 'created_at', 'full_text', 'is_retweet', 'is_quote_status', 'retweet_full_text', 'retweeted_status']
+
+# Get the remaining columns that are not in the desired order
+remaining_columns = [col for col in tweets_df.columns if col not in main_columns]
+new_column_order = main_columns + remaining_columns
+
+# Reorder the DataFrame columns
+tweets_df = tweets_df[new_column_order]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Converting Numeric 0/1 to Bool
+for column in tweets_df.columns:
+    # Check if the column is numeric
+    if pd.api.types.is_numeric_dtype(tweets_df[column]):
+        # Exclude NaN values and check if all remaining values are either 0 or 1
+        non_na_values = tweets_df[column].dropna()
+        if non_na_values.isin([0, 1]).all():
+            # Convert the column to boolean
+            tweets_df[column] = tweets_df[column].astype(bool)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Convert 'created_at' to datetime
+tweets_df['created_at'] = pd.to_datetime(tweets_df['created_at'])
+
+# Conversion from numpy array to list - due to dataiku using CSV internally
+tweets_df['hashtags'] = tweets_df['hashtags'].apply(lambda x: list(x) if isinstance(x, np.ndarray) else x)
+
+# Drop columns that we don't use
+tweets_df.drop(columns=['available', 'in_reply_to_user_id_str', 'retweet_count', 'favorite_count', 'favorited', \
+                       'followers_count', 'location'], inplace=True)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Types of values in tweets dataframe
+specific_types = {}
+for column in tweets_df.columns:
+    # Find the first non-null value in the column
+    non_null_value = tweets_df[column].dropna().iloc[0]
+    
+    # Get the type of this value
+    specific_types[column] = type(non_null_value)
+
+specific_types
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write recipe outputs
+# Dataset tweets_df renamed to tweets_raw by fraunhofer1 on 2024-01-12 11:17:03
+tweets_df_dataset = dataiku.Dataset("tweets_raw")
+tweets_df_dataset.write_with_schema(tweets_df)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Metadata about individual Representatives - Twitter account Name, Party affiliation, Region etc.
+politician_df = pd.read_pickle(folder_path + '/politician_metadata_df.pickle')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Remove rows where 'Twitter' (username) column is empty or null
+politician_with_username = politician_df[politician_df['Twitter'].notna() & (politician_df['Twitter'] != '')]
+
+# Filter to keep only the rows where 'Name' values appear in tweets_df['name']
+politician_filtered = politician_with_username[politician_with_username['Name'].isin(tweets_df['name'])]
+
+# Create the mapping
+mapping_df = politician_filtered.groupby('Twitter').first().reset_index()[['Twitter', 'Name']]
+
+# Rename columns for clarity
+mapping_df.columns = ['username', 'name']
+
+# Remove leading '@' from usernames
+mapping_df['username'] = mapping_df['username'].str.lstrip('@')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Number of NaNs in mapping_df: ", mapping_df.isna().sum())
+print("Number of rows with empty strings in mapping_df:", mapping_df[(mapping_df['username']=='')|(mapping_df['name']=='')].sum().sum())
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Write the mapping to a dataset
+user_mapping_dataset = dataiku.Dataset("name_username_mapping")
+user_mapping_dataset.write_with_schema(mapping_df)

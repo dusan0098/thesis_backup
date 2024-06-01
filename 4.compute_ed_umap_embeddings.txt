@@ -1,0 +1,224 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+import pickle
+from sklearn.decomposition import PCA
+from umap import UMAP
+import time
+from datetime import datetime
+from utils import select_gpu_with_most_free_memory
+import os
+import json
+
+# Read recipe inputs
+embeddings_folder = dataiku.Folder("Z3UWhKIL")
+embeddings_folder_path = embeddings_folder.get_path()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+device = select_gpu_with_most_free_memory()
+print(f"Using device: {device}")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def rescale(x, inplace=False):
+    """ Rescale an embedding for UMAP. """
+    if not inplace:
+        x = np.array(x, copy=True)
+    x /= np.std(x[:, 0]) * 10000
+    return x
+
+def generate_umap_embeddings(embeddings, umap_config_dict):
+    # Apply PCA and rescale
+    pca_embeddings = rescale(PCA(n_components=umap_config_dict.get("n_components",2)).fit_transform(embeddings))
+
+    start_time = time.time()
+    print("UMAP Start Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
+    
+    # Initialize UMAP with the given configuration and PCA embeddings as the starting point
+    umap_model = UMAP(**umap_config_dict, init=pca_embeddings)
+
+    # Fit UMAP and transform the embeddings
+    umap_embeddings = umap_model.fit_transform(embeddings)
+
+    end_time = time.time()
+    print("UMAP End Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
+
+    time_taken_seconds = end_time - start_time
+    time_taken_minutes = time_taken_seconds / 60
+    print("Time taken for UMAP embedding:", time_taken_minutes, "minutes")
+
+    return umap_embeddings, time_taken_minutes
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons= load_experiment_jsons(
+                            root_folder_path = embeddings_folder_path,
+                            dataset_name = "",
+                            experiment_details_subfolder = "experiment_details")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons[0]
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def save_umap_embeddings(umap_embeddings, tweet_ids, umap_config, pipeline_json, time_taken_minutes, umap_folder_path):
+    # Create subfolders for UMAP embeddings and JSON files
+    dataset_name_for_saving = pipeline_json["dataset_name"].replace("/", "-")
+    embedding_json = pipeline_json["embedding_config"]
+    embedding_model_name = embedding_json["model_name"]
+    embedding_model_name_for_saving = embedding_model_name.replace("/", "-")
+
+    umap_subfolder = os.path.join(umap_folder_path, "umap_embeddings")
+    json_subfolder = os.path.join(umap_folder_path, "umap_experiment_details")
+    os.makedirs(umap_subfolder, exist_ok=True)
+    os.makedirs(json_subfolder, exist_ok=True)
+
+    # Prepare file names
+    unix_timestamp, current_time = get_current_time_and_unix_timestamp()
+    umap_params_str = "_".join([f"{key}{value}" for key, value in umap_config.items()])
+
+    umap_filename = f"umap_{embedding_model_name_for_saving}_{umap_params_str}_{current_time}.pkl"
+    json_filename = f"umap_{embedding_model_name_for_saving}_{umap_params_str}_{current_time}_details.json"
+
+    # Save UMAP embeddings
+    umap_save_location = os.path.join(umap_subfolder, umap_filename)
+    data_to_save = {
+        "tweet_ids": tweet_ids, 
+        "umap_embeddings": umap_embeddings 
+    }
+    
+    # Saving UMAP embeddings
+    with open(umap_save_location, 'wb') as f:
+        pickle.dump(data_to_save, f)
+
+    # Save UMAP experiment details
+    umap_details = {
+        "umap_embeddings_save_location": umap_save_location,
+        "umap_embeddings_timestamp": current_time,
+        "time_taken_minutes":time_taken_minutes,
+    }
+    
+    experiment_details = pipeline_json.copy()
+    
+    experiment_details.update({
+        "umap_config": umap_config,
+        "umap_details": umap_details
+    })
+    
+    json_save_location = os.path.join(json_subfolder, json_filename)
+    with open(json_save_location, 'w') as json_file:
+        json.dump(experiment_details, json_file, indent=4)
+
+    print(f"UMAP embeddings and experiment details saved successfully for {dataset_name_for_saving}.")
+    return umap_save_location, json_save_location
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# UMAP configuration
+umap_configs = [
+    {
+   "n_neighbors": 10, 
+   "n_components": 2, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+    {
+   "n_neighbors": 15, # Original
+   "n_components": 2, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+   {
+   "n_neighbors": 30, 
+   "n_components": 2, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+   },
+   {
+   "n_neighbors": 10,
+   "n_components": 5, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+    {
+   "n_neighbors": 15, 
+   "n_components": 5, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+   {
+   "n_neighbors": 30, 
+   "n_components": 5, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+   },
+        {
+   "n_neighbors": 10,
+   "n_components": 10, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+    {
+   "n_neighbors": 15, 
+   "n_components": 10, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+    },
+   {
+   "n_neighbors": 30, 
+   "n_components": 10, 
+   "min_dist": 0.0, 
+   "metric": "cosine"
+   }
+]
+
+umap_embeddings_folder = dataiku.Folder("qgFUqORn")
+umap_embeddings_folder_path = umap_embeddings_folder.get_path()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+for curr_details in experiment_jsons:
+
+    curr_embeddings = load_experiment_objects(experiment_jsons = [curr_details], 
+                            file_path_key = "embeddings_save_location")[0]
+    
+    embeddings = curr_embeddings["embeddings"]
+    tweet_ids = curr_embeddings["tweet_ids"]
+    
+    for curr_umap_config in umap_configs:
+        umap_embeddings, time_taken = generate_umap_embeddings(embeddings = embeddings, 
+                                                               umap_config_dict = curr_umap_config)
+        save_umap_embeddings(umap_embeddings = umap_embeddings, 
+                             tweet_ids = tweet_ids, 
+                             umap_config = curr_umap_config,
+                             pipeline_json = curr_details, 
+                             time_taken_minutes = time_taken, 
+                             umap_folder_path = umap_embeddings_folder_path,
+                            )
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Alternative approach - use PCA to get to lower dimensions while keeping most of the variance then use UMAP
+# def generate_umap_embeddings(embeddings, umap_config_dict, n_components_pca=100):
+#     # Apply PCA without rescaling
+#     pca_embeddings = PCA(n_components=n_components_pca).fit_transform(embeddings)
+    
+#     start_time = time.time()
+#     print("UMAP Start Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
+
+#     # Initialize UMAP with the given configuration
+#     umap_model = UMAP(**umap_config_dict)
+
+#     # Fit UMAP and transform the PCA-reduced embeddings
+#     umap_embeddings = umap_model.fit_transform(pca_embeddings)
+
+#     end_time = time.time()
+#     print("UMAP End Time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
+
+#     time_taken_seconds = end_time - start_time
+#     time_taken_minutes = time_taken_seconds / 60
+#     print("Time taken for UMAP embedding:", time_taken_minutes, "minutes")
+
+#     return umap_embeddings, time_taken_minutes
+
+# umap_config = {"n_neighbors": 15, "n_components": 2, "min_dist": 0.0, "metric": "cosine"}
+# n_components_pca = 100
+# umap_embeddings, time_taken = generate_umap_embeddings(embeddings, umap_config, n_components_pca)
