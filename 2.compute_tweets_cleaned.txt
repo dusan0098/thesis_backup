@@ -136,7 +136,7 @@ def preprocess_tweets(df, mapping_df, config):
     
     username_to_name = dict(zip(mapping_df['username'], mapping_df['name']))
     
-    if config.get["replace_truncated"]:
+    if config["replace_truncated"]:
         new_df = replace_truncated_text(new_df, text_column = "full_text", retweet_column = "retweet_full_text")
         print("Length after replacing truncated tweets:", len(new_df))
     
@@ -165,11 +165,11 @@ def preprocess_tweets(df, mapping_df, config):
         new_df = remove_short_tweets(new_df, ['full_text'], min_word_count = function_config.get("min_word_count",5))
         print("Length after remove_short_tweets:", len(new_df))
         
-    if config.get("replace_html_entities", False):
+    if config["replace_html_entities"]:
         new_df = replace_html_entities(new_df, ['full_text'])
         print("Length after replacing HTML entities:", len(new_df))
     
-    if config.get("replace_german_umlauts", False):
+    if config["replace_german_umlauts"]:
         new_df = replace_german_umlauts(new_df, ['full_text'])
         print("Length after replacing German umlauts:", len(new_df))
     
