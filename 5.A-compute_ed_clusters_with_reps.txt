@@ -28,8 +28,9 @@ preprocessed_data = dataiku.Folder("PpRdk4F7")
 preprocessed_data_folder_path = preprocessed_data.get_path()
 
 # Recipe outputs
-ed_clusters_with_reps = dataiku.Folder("ifdsjiNI")
+ed_clusters_with_reps = dataiku.Folder("oiEvOl5p")
 ed_clusters_folder_path = ed_clusters_with_reps.get_path()
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 from utils import (
     select_gpu_with_most_free_memory,
@@ -49,28 +50,30 @@ experiment_jsons = load_experiment_jsons(
                             dataset_name = "",
                             experiment_details_subfolder = "umap_experiment_details")
 
-original_experiments = [e for e in experiment_jsons if 
-                       (e["embedding_config"]["model_name"] == "intfloat/multilingual-e5-large")
-                       and (e["preprocessing_steps"]["remove_hashtags"] == False)
+original_experiments = [e for e in experiment_jsons if
+                       (e["embedding_config"]["model_name"] == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+                       #and (e["preprocessing_steps"]["remove_hashtags"] == False)
                        and (e["umap_config"]["n_components"] == 2)
                        and (e["umap_config"]["n_neighbors"] == 15)
                        ]
+print(f"Number of experiments to be performed: {len(original_experiments)}")
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Join tweets with their embeddings
 # umap_emb_with_id - embedding,id lists saved as .pkl
-# experiment_json - the JSON that contains info on the embeddings and  
+# experiment_json - the JSON that contains info on the embeddings and
 
 def prepare_clustering_data(experiment_json, dataframe_columns):
     # Load saved (umap_embedding_list, id_list)
-    umap_emb_with_id = load_experiment_objects(experiment_jsons = [curr_json], 
+    umap_emb_with_id = load_experiment_objects(experiment_jsons = [curr_json],
                             file_path_key = "umap_embeddings_save_location")[0]
     tweet_ids = umap_emb_with_id["tweet_ids"]
     umap_embeddings = umap_emb_with_id["umap_embeddings"]
-    
+
     # Load dataset that was used to generate the embeddings
-    tweets_df = load_experiment_objects([experiment_json], 
+    tweets_df = load_experiment_objects([experiment_json],
                                         file_path_key = "dataset_location")[0]
-    
+
     # Keep only IDs that were used for the embeddings
     tweet_ids_df = pd.DataFrame({'tweet_id': tweet_ids})
     filtered_tweets_df = tweet_ids_df.merge(tweets_df, on='tweet_id', how='left')
@@ -84,16 +87,19 @@ def prepare_clustering_data(experiment_json, dataframe_columns):
     tweets_df = filtered_tweets_df[dataframe_columns]
     tweets_df['date'] = tweets_df['created_at'].dt.date
     return tweets_df
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Start date from where we perform clustering
 start_date = pd.Timestamp('2017-01-01')
 
 # Columns that we want to get from the original dataframe when fetching by Tweet_id
 dataframe_columns = ["tweet_id","full_text","created_at","umap_embedding","hashtags"]
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Example of loading dataset with embeddings
 # tweets_df = prepare_clustering_data(original_experiments[0], dataframe_columns)
 # tweets_df
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import nltk
 nltk.download('stopwords')
@@ -115,8 +121,10 @@ representation_model = {
     "mmr": MaximalMarginalRelevance(diversity=.5),
     #Example with chaining: "keybert_mmr": [KeyBERTInspired(top_n_words=30), MaximalMarginalRelevance(diversity=.5)],
 }
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ## Saving results of clustering and representation generation
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Helper function for creating JSON of representation model
 def get_representation_model_str(representation_model_config):
@@ -132,6 +140,7 @@ def get_representation_model_str(representation_model_config):
             # Apply str() to get a serializable description
             serializable_config[key] = str(value)
     return serializable_config
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def save_clustering_results(clusters_df, clustering_folder_path, pipeline_json, hdbscan_config, representation_model_config,
                             time_taken_minutes, cluster_statistics):
@@ -169,25 +178,27 @@ def save_clustering_results(clusters_df, clustering_folder_path, pipeline_json, 
         "period_start": period_start,
         "period_end": period_end,
     }
-    
+
     clustering_details.update(cluster_statistics)
-    
+
     experiment_details = pipeline_json.copy()
-    
+
     experiment_details.update({
         "hdbscan_config": hdbscan_config,
         "representation_model_config": repr_model_params_str,
         "clustering_details": clustering_details
     })
-    
+
     json_save_location = os.path.join(details_subfolder, json_filename)
     with open(json_save_location, 'w') as json_file:
         json.dump(experiment_details, json_file, indent=4)
 
     print(f"Clustering results and experiment details saved successfully for {dataset_name_for_saving}.")
     return clustering_save_location, json_save_location
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ## Generating clusters for a given HDBSCAN config and experiment
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def get_vectorizer_settings(num_docs):
     if num_docs > 0:
@@ -204,29 +215,29 @@ def get_vectorizer_settings(num_docs):
 
 def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
     cluster_results = []
-    
+
     statistics = {
         'days_without_clusters': 0,
         'num_clusters_per_day': [],
         'average_cluster_size': []
     }
-    
+
     # Make sure to load model only once
     # Add logic for picking model
     embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-    
+
     start_time = time.time()
     # Function to process each group of tweets
     for date, group in tqdm(grouped_tweets, desc="Clustering Tweets for Each Day"):
         day_embeddings = np.array(group['umap_embedding'].tolist())
         day_docs = np.array(group['full_text'].tolist())
         tweet_ids = group['tweet_id'].tolist()
-        
+
         # Perform HDBSCAN clustering
         if verbose:
             print(f"HDBSCAN Start Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print("Fitting topic model")      
-                  
+            print("Fitting topic model")
+
         hdbscan_model = hdbscan.HDBSCAN(
                 min_cluster_size= hdbscan_config.get('min_cluster_size', 5),
                 min_samples= hdbscan_config.get('min_samples', None),
@@ -236,7 +247,7 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
                 gen_min_span_tree=hdbscan_config.get('gen_min_span_tree', False),
             )
         # topics = clusterer.fit_predict(day_embeddings)
-        
+
         # Vectorizer settings, adjusted from original min_df = 2, max_df = 0.5 to allow for cases with few clusters
         num_docs = len(day_docs)
         min_df, max_df = get_vectorizer_settings(num_docs)
@@ -248,23 +259,23 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
         )
                 # Perform clustering and handle errors
         try:
-            # Performing Topic Clustering with existing embeddings     
+            # Performing Topic Clustering with existing embeddings
             topic_model = BERTopic(
                 # Needed for KeyBERT, otherwise can be left out
                 embedding_model = embedding_model,
                 # Needed to skip UMAP when clustering
                 umap_model = BaseDimensionalityReduction(),
                 hdbscan_model = hdbscan_model,
-                
-                vectorizer_model=vectorizer_model,        
-                ctfidf_model=ctfidf_model,                
+
+                vectorizer_model=vectorizer_model,
+                ctfidf_model=ctfidf_model,
                 representation_model=representation_model,
-                
+
                 verbose=verbose,
             )
-                  
+
             topics, probs = topic_model.fit_transform(day_docs, embeddings = day_embeddings)
-        
+
         except ValueError as e:
             if "After pruning, no terms remain" in str(e):
                 print(f"Error: {e}. Retrying with adjusted min_df and max_df settings.")
@@ -279,20 +290,20 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
                     embedding_model = embedding_model,
                     umap_model = BaseDimensionalityReduction(),
                     hdbscan_model = hdbscan_model,
-                    vectorizer_model=vectorizer_model,        
-                    ctfidf_model=ctfidf_model,                
+                    vectorizer_model=vectorizer_model,
+                    ctfidf_model=ctfidf_model,
                     representation_model=representation_model,
                     verbose=verbose,
                 )
                 topics, probs = topic_model.fit_transform(day_docs, embeddings = day_embeddings)
             else:
                 raise e
-        
-        # Extracting main info that we need 
+
+        # Extracting main info that we need
         topic_info = topic_model.get_topic_info()
         topic_info = topic_info[topic_info['Topic'] != -1]  # Ignore outliers
         topic_info = topic_info[['Topic', 'Count','Representation','keybert', 'mmr']]
-              
+
         topic_info.rename(columns={
             'Topic': 'topic_id',
             'Count': 'cluster_size',
@@ -300,21 +311,21 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
             'keybert': 'keybert_representation',
             'mmr': 'mmr_representation'
         }, inplace=True)
-        
+
         # Create a dictionary to map topics to tweet IDs
         topic_to_tweet_ids = {topic_id: [] for topic_id in topic_info['topic_id']}
         for idx, topic in enumerate(topics):
             if topic != -1:
                 topic_to_tweet_ids[topic].append(tweet_ids[idx])
-        
+
         # Add tweet IDs and representative docs to the topic_info DataFrame
         topic_info['tweet_ids'] = topic_info['topic_id'].map(topic_to_tweet_ids)
         topic_info['date'] = date
         #print(topic_info)
         cluster_results.append(topic_info)
-                  
+
         if verbose:
-            print(f"HDBSCAN End Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")       
+            print(f"HDBSCAN End Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # Calculate statistics
         if len(set(topics) - {-1}) == 0:
@@ -323,8 +334,8 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
             statistics['num_clusters_per_day'].append(len(set(topics) - {-1}))
             cluster_sizes = [topics.count(label) for label in set(topics) - {-1}]
             statistics['average_cluster_size'].extend(cluster_sizes)
-        
-    end_time = time.time()          
+
+    end_time = time.time()
     time_taken_minutes = (end_time - start_time) / 60
 
     clusters_df = pd.concat(cluster_results, ignore_index=True)
@@ -333,59 +344,63 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, verbose=False):
 
     # Remove list fields from statistics
     statistics = {key: value for key, value in statistics.items() if not isinstance(value, list)}
-        
+
     return clusters_df, statistics, time_taken_minutes
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # For now we run it only for a single hdbscan_config
 # original min_cluster_size: 5, min_samples: 20, 27 days without clusters, 9394 clusters
 hdbscan_configs = [
     {
     "min_cluster_size": 10,
-    "min_samples": 10, 
+    "min_samples": 10,
     "alpha": 1.0,
     "cluster_selection_method": 'leaf'
     },
 ]
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ## Looping over all experiments and HDBSCAN configs
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Change if you want BERTopic messages
 verbose = False
 cluster_df_list = []
 config_statistics_list = []
 
-for curr_json in original_experiments: # list containing previous UMAPs that we want to cluster 
+for curr_json in original_experiments: # list containing previous UMAPs that we want to cluster
     tweets_df = prepare_clustering_data(curr_json, dataframe_columns)
-    
+
     # Filter based on period where there is enough data for clustering
     tweets_df = tweets_df[tweets_df['date']>=start_date]
-    
+
     # Just to make testing faster - remove later
 #     end_date = pd.Timestamp('2017-01-07')
 #     tweets_df = tweets_df[tweets_df['date']<=end_date]
-    
+
     # Group tweets on daily level
     grouped_tweets = tweets_df.groupby('date')
-    
-    for hdbscan_config in tqdm(hdbscan_configs):    
+
+    for hdbscan_config in tqdm(hdbscan_configs):
         clusters_df, statistics, time_taken = perform_clustering(
-                                         grouped_tweets = grouped_tweets, 
-                                         hdbscan_config = hdbscan_config,  
-                                         top_n = 10,         
+                                         grouped_tweets = grouped_tweets,
+                                         hdbscan_config = hdbscan_config,
+                                         top_n = 10,
                                          verbose = verbose)
-        cluster_df_list.append(clusters_df)     
+        cluster_df_list.append(clusters_df)
 
         statistics_row = hdbscan_config.copy()
         statistics_row.update(statistics)
         config_statistics_list.append(statistics_row)
-        
+
         save_clustering_results(clusters_df = clusters_df,
                         clustering_folder_path = ed_clusters_folder_path,
                         pipeline_json = curr_json,
-                        hdbscan_config = hdbscan_config, 
-                        representation_model_config = representation_model,             
+                        hdbscan_config = hdbscan_config,
+                        representation_model_config = representation_model,
                         time_taken_minutes = time_taken,
                         cluster_statistics = statistics)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 cluster_df_list[0], config_statistics_list[0]
 
