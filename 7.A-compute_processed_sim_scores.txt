@@ -1,0 +1,138 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+from datetime import datetime
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+# Read recipe inputs
+ed_similarity_scores = dataiku.Folder("0JFzvl2d")
+ed_similarity_scores_path = ed_similarity_scores.get_path()
+
+# Write recipe outputs
+ed_similarity_scores_processed = dataiku.Folder("hZfSC2LV")
+ed_similarity_scores_processed_info = ed_similarity_scores_processed.get_path()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons = load_experiment_jsons(
+                            root_folder_path = ed_similarity_scores_path,
+                            dataset_name = "",
+                            experiment_details_subfolder = "similarity_experiment_details")
+
+# Add filters if necessary
+filtered_jsons = experiment_jsons
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+device = select_gpu_with_most_free_memory()
+
+for curr_json in filtered_jsons:
+    similarity_scores = load_experiment_objects(experiment_jsons = [curr_json],
+                            file_path_key = "similarity_save_location")[0]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+similarity_scores= similarity_scores[similarity_scores["timeline_date"]!=pd.Timestamp("2019-01-02")]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df = similarity_scores.copy()
+# Convert date columns to datetime
+df['date'] = pd.to_datetime(df['date'])
+df['timeline_date'] = pd.to_datetime(df['timeline_date'])
+
+# Determine full timeline
+full_timeline = pd.date_range(start=df['timeline_date'].min(), end=df['timeline_date'].max(), freq='D')
+
+# Create a multi-index with all combinations of topic_id, date, and the full timeline
+all_combinations = pd.MultiIndex.from_product(
+    [df['topic_id'].unique(), df['date'].unique(), full_timeline],
+    names=['topic_id', 'date', 'timeline_date']
+)
+
+# Reindex the DataFrame to ensure all combinations are present
+df.set_index(['topic_id', 'date', 'timeline_date'], inplace=True)
+df = df.reindex(all_combinations)
+
+# Interpolate missing values within each (topic_id, date) combination
+df = df.groupby(['topic_id', 'date']).apply(lambda group: group.interpolate(method='linear'))
+
+# Reset index to prepare for pivot
+df.reset_index(inplace=True)
+
+# Transform to wide format: create lists of scores for each (topic_id, date) combination
+def aggregate_scores(group):
+    return pd.Series({
+        'max_sim_ctfidf_list': group['max_sim_ctfidf'].tolist(),
+        'max_sim_keybert_list': group['max_sim_keybert'].tolist(),
+        'max_sim_mmr_list': group['max_sim_mmr'].tolist()
+    })
+
+# Apply the aggregation
+df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
+
+# Display the wide DataFrame
+df_wide.head()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_wide.iloc[0]["max_sim_keybert_list"]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_global_distribution(data, column_name):
+    """
+    Plot the global distribution of a column's values.
+    :param data: DataFrame containing the data.
+    :param column_name: Name of the column to plot.
+    """
+    plt.figure(figsize=(10, 6))
+    sns.histplot(data[column_name], kde=True)
+    plt.title(f'Distribution of {column_name}')
+    plt.xlabel(column_name)
+    plt.ylabel('Frequency')
+    plt.show()
+
+# Example usage
+plot_global_distribution(similarity_scores, 'max_sim_keybert')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def enhanced_robust_scale_scores(scores):
+    """
+    Scale the scores robustly using quantiles for the lower bound and fix the upper bound to 1.
+    :param scores: A list or array of similarity scores.
+    :return: Scaled scores as a numpy array.
+    """
+    q1 = np.percentile(scores, 2)   # 1st percentile for lower bound
+    max_value = 1.0  # Fix the upper bound to 1
+
+    # Clip scores to quantile range for lower bound only
+    scores_clipped = np.clip(scores, q1, max_value)
+    
+    # Scale scores to 0-1 range
+    scaled_scores = (scores_clipped - q1) / (max_value - q1)
+    
+    return scaled_scores
+
+# Example usage
+scores = np.array(similarity_scores["max_sim_keybert"])  # Example similarity scores
+scaled_scores = enhanced_robust_scale_scores(scores)
+
+# Plotting the scaled scores to visualize the distribution
+plt.figure(figsize=(10, 6))
+sns.histplot(scaled_scores, kde=True)
+plt.title('Distribution of Scaled Similarity Scores')
+plt.xlabel('Scaled Similarity Score')
+plt.ylabel('Frequency')
+plt.show()
