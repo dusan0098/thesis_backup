@@ -20,7 +20,6 @@ import json
 import re
 import os
 import pickle
-import torch
 
 # Read recipe inputs
 tweets_raw = dataiku.Dataset("tweets_raw")
@@ -28,6 +27,18 @@ df_input = tweets_raw.get_dataframe()
 
 name_mapping = dataiku.Dataset("name_username_mapping")
 mapping_df = name_mapping.get_dataframe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_input['created_at'] = pd.to_datetime(df_input['created_at'])
+
+# Define the date you want to filter by
+start_date = pd.Timestamp('2019-01-01')
+
+# Filter rows where the date part of 'created_at' matches 'filter_date'
+df_input = df_input[df_input['created_at'].dt.date >= start_date.date()]
+
+# Print the filtered DataFrame
+print(f"FILTERED OUT ALL ROWS PRIOR TO {start_date}: {len(df_input)} rows left")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 specific_types = {}
@@ -126,6 +137,18 @@ print(f"Using device: {local_device}")
 # plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def remove_rt_symbol(df, column):
+    def clean_rt(text):
+        # Remove "RT " at the start of the tweet
+        text = re.sub(r'^RT\s+', '', text)
+        # Remove " RT " surrounded by spaces
+        text = re.sub(r'\s+RT\s+', ' ', text)
+        return text
+    
+    df[column] = df[column].apply(lambda text: clean_rt(text) if isinstance(text, str) else text)
+    return df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 from event_detection.preprocess_tweets import *
 
 # Example of using preprocessing functions on several columns
@@ -160,14 +183,18 @@ def preprocess_tweets(df, mapping_df, config):
         new_df = remove_empty_rows(new_df, ['full_text'])
         print("Length after remove_empty_rows:", len(new_df))
         
+    if config["remove_html_entities"]:
+        new_df = remove_html_entities(new_df, ['full_text'])
+        print("Length after replacing HTML entities:", len(new_df))
+        
+    if config["remove_rt_symbol"]:
+        new_df = remove_rt_symbol(new_df, 'full_text')
+        print("Length after removing RT symbol:", len(new_df))
+        
     if config["remove_short_tweets"]:
         function_config = config["remove_short_tweets_config"]
         new_df = remove_short_tweets(new_df, ['full_text'], min_word_count = function_config.get("min_word_count",5))
         print("Length after remove_short_tweets:", len(new_df))
-        
-    if config["replace_html_entities"]:
-        new_df = replace_html_entities(new_df, ['full_text'])
-        print("Length after replacing HTML entities:", len(new_df))
     
     if config["replace_german_umlauts"]:
         new_df = replace_german_umlauts(new_df, ['full_text'])
@@ -269,6 +296,7 @@ get_current_time_and_unix_timestamp()
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 preprocessing_combinations = [
 {
+    "remove_rt_symbol": True, 
     "replace_truncated": True,
     "remove_urls": True,
     "replace_mentions": True,
@@ -286,7 +314,7 @@ preprocessing_combinations = [
     "remove_short_tweets_config":{
         "min_word_count":4
     },
-    "replace_html_entities": True,
+    "remove_html_entities": True,
     "replace_german_umlauts": False,
 },
     # DEFINE ALTERNATIVE PREPROCESS
