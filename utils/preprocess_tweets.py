@@ -132,18 +132,16 @@ def replace_entities(text, entity_dict):
         text = text.replace(entity, char)
     return text
 
-# Replace HTML entities
-def replace_html_entities(df, columns):
-    html_entities = {
-        '&amp;': '&',
-        '&lt;': '<',
-        '&gt;': '>',
-        '&quot;': '"',
-        '&#39;': "'",
-    }
+# Remove html entitites
+def remove_html_entities(df, columns):
+    html_entities = ['&amp;', '&lt;', '&gt;', '&quot;', '&#39;']
+    
     for column in columns:
-        df[column] = df[column].apply(lambda text: replace_entities(text, html_entities) if isinstance(text, str) else text)
+        for entity in html_entities:
+            df[column] = df[column].str.replace(entity, '', regex=False)
+    
     return df
+
 
 
 # Replace German umlauts
