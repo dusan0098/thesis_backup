@@ -155,7 +155,10 @@ df_wide.sort_values(['date', 'topic_id'],inplace = True)
 df_wide.head()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide.columns
+df_wide["date"] = pd.to_datetime(df_wide['date'], utc=True)
+clusters_df["date"] = pd.to_datetime(clusters_df['date'], utc=True)
+df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
+df_wide.head(3)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 sim_column = "max_sim_keybert_list"
@@ -166,13 +169,10 @@ print(q_lower,q_upper)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 from statsmodels.nonparametric.smoothers_lowess import lowess
-def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list"):
-    # Sample N random clusters
-    aLL_scores = np.array(aggregated_df[sim_column])
-    q_lower = 0.9990735650062561#np.percentile(aLL_scores, 70)
-    q_upper = 0.9972202777862549#np.percentile(aLL_scores, 30)
-    
-    sampled_clusters = aggregated_df.sample(n=N)
+def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list"):    
+    aLL_scores = np.array(np.concatenate(aggregated_df[sim_column]))
+    q_lower = np.percentile(aLL_scores, 70)
+    q_upper = np.percentile(aLL_scores, 40)
 
     # Extract the global start and end dates from the DataFrame
     global_start_date = aggregated_df['date'].min()
@@ -180,6 +180,12 @@ def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_key
 
     # Generate a timeline from the global start to end date
     timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    # TESTING FILTER
+    aggregated_df = aggregated_df[aggregated_df["date"]==pd.Timestamp("2020-02-09 00:00:00+00:00")]
+    
+    # Sample N random clusters
+    sampled_clusters = aggregated_df.sample(n=N,replace=False)
 
     # Plotting
     fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
@@ -205,7 +211,7 @@ def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_key
         ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
         ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
 
-        ax.set_title(f'Cluster: {row["date"]}-{row["topic_id"]}')
+        ax.set_title(f'{row["date"].date()}-{row["ctfidf_representation"][:6]}')
         ax.set_xlabel('Observation Date')
         ax.set_ylabel('Max Similarity')
         ax.legend()
@@ -213,7 +219,9 @@ def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_key
     plt.tight_layout()
     plt.show()
 
-visualize_loess_smoothing(df_wide, N=10, alpha=0.03, sim_column = "max_sim_keybert_list")
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_test = df_wide.copy()
+visualize_loess_smoothing(df_test, N=10, alpha=0.025, sim_column = sim_column)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 np.array(similarity_scores["max_sim_keybert"])
