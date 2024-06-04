@@ -39,49 +39,10 @@ for curr_json in filtered_jsons:
                             file_path_key = "similarity_save_location")[0]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-similarity_scores= similarity_scores[similarity_scores["timeline_date"]!=pd.Timestamp("2019-01-02")]
+similarity_scores.head()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df = similarity_scores.copy()
-# Convert date columns to datetime
-df['date'] = pd.to_datetime(df['date'])
-df['timeline_date'] = pd.to_datetime(df['timeline_date'])
-
-# Determine full timeline
-full_timeline = pd.date_range(start=df['timeline_date'].min(), end=df['timeline_date'].max(), freq='D')
-
-# Create a multi-index with all combinations of topic_id, date, and the full timeline
-all_combinations = pd.MultiIndex.from_product(
-    [df['topic_id'].unique(), df['date'].unique(), full_timeline],
-    names=['topic_id', 'date', 'timeline_date']
-)
-
-# Reindex the DataFrame to ensure all combinations are present
-df.set_index(['topic_id', 'date', 'timeline_date'], inplace=True)
-df = df.reindex(all_combinations)
-
-# Interpolate missing values within each (topic_id, date) combination
-df = df.groupby(['topic_id', 'date']).apply(lambda group: group.interpolate(method='linear'))
-
-# Reset index to prepare for pivot
-df.reset_index(inplace=True)
-
-# Transform to wide format: create lists of scores for each (topic_id, date) combination
-def aggregate_scores(group):
-    return pd.Series({
-        'max_sim_ctfidf_list': group['max_sim_ctfidf'].tolist(),
-        'max_sim_keybert_list': group['max_sim_keybert'].tolist(),
-        'max_sim_mmr_list': group['max_sim_mmr'].tolist()
-    })
-
-# Apply the aggregation
-df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
-
-# Display the wide DataFrame
-df_wide.head()
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide.iloc[0]["max_sim_keybert_list"]
+#similarity_scores[similarity_scores["date"]==pd.Timestamp("2020-04-24")]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import seaborn as sns
@@ -101,7 +62,7 @@ def plot_global_distribution(data, column_name):
     plt.show()
 
 # Example usage
-plot_global_distribution(similarity_scores, 'max_sim_keybert')
+#plot_global_distribution(similarity_scores, 'max_sim_keybert')
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import numpy as np
@@ -114,7 +75,7 @@ def enhanced_robust_scale_scores(scores):
     :param scores: A list or array of similarity scores.
     :return: Scaled scores as a numpy array.
     """
-    q1 = np.percentile(scores, 2)   # 1st percentile for lower bound
+    q1 = np.percentile(scores, 2)#1   # 1st percentile for lower bound
     max_value = 1.0  # Fix the upper bound to 1
 
     # Clip scores to quantile range for lower bound only
@@ -127,12 +88,133 @@ def enhanced_robust_scale_scores(scores):
 
 # Example usage
 scores = np.array(similarity_scores["max_sim_keybert"])  # Example similarity scores
-scaled_scores = enhanced_robust_scale_scores(scores)
+# scaled_scores = enhanced_robust_scale_scores(scores)
 
-# Plotting the scaled scores to visualize the distribution
-plt.figure(figsize=(10, 6))
-sns.histplot(scaled_scores, kde=True)
-plt.title('Distribution of Scaled Similarity Scores')
-plt.xlabel('Scaled Similarity Score')
-plt.ylabel('Frequency')
-plt.show()
+# # Plotting the scaled scores to visualize the distribution
+# plt.figure(figsize=(10, 6))
+# sns.histplot(scaled_scores, kde=True)
+# plt.title('Distribution of Scaled Similarity Scores')
+# plt.xlabel('Scaled Similarity Score')
+# plt.ylabel('Frequency')
+# plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print(len(similarity_scores))
+print("Unique Clusters * days:", 8073 * 480)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#similarity_scores= similarity_scores[similarity_scores["timeline_date"]!=pd.Timestamp("2019-01-02")]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Imputing values for missing dates
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df = similarity_scores.copy()
+# Convert date columns to datetime
+df['date'] = pd.to_datetime(df['date'])
+df['timeline_date'] = pd.to_datetime(df['timeline_date'])
+df.sort_values(['date', 'topic_id','timeline_date'],inplace = True)
+
+# Determine full timeline
+full_timeline = pd.date_range(start=df['timeline_date'].min(), end=df['timeline_date'].max(), freq='D')
+
+combinations = df[['topic_id', 'date']].value_counts().index
+# Create a multi-index with all combinations of topic_id, date, and the full timeline
+all_combinations = pd.MultiIndex.from_product(
+    [df['topic_id'].unique(), df['date'].unique(), full_timeline],
+     names=['topic_id', 'date', 'timeline_date'],
+)
+
+# Reindex the DataFrame to ensure all combinations are present
+df.set_index(['topic_id', 'date', 'timeline_date'], inplace=True)
+df = df.reindex(all_combinations)
+
+# Interpolate missing values within each (topic_id, date) combination
+df = df.groupby(['topic_id', 'date']).apply(lambda group: group.interpolate(method='linear'))
+
+# Removes all combinations that didn't exist in original set
+df = df.dropna(subset=['max_sim_ctfidf','max_sim_keybert'])
+
+# Reset index to prepare for pivot
+df.reset_index(inplace=True)
+
+# Transform to wide format: create lists of scores for each (topic_id, date) combination
+def aggregate_scores(group):
+    return pd.Series({
+        'max_sim_ctfidf_list': group['max_sim_ctfidf'].tolist(),
+        'max_sim_keybert_list': group['max_sim_keybert'].tolist(),
+    })
+
+# Apply the aggregation
+df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
+
+# Sort in order of topics
+df_wide.sort_values(['date', 'topic_id'],inplace = True)
+
+# Display the wide DataFrame
+df_wide.head()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_wide.columns
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+sim_column = "max_sim_keybert_list"
+aLL_scores = np.array(np.concatenate(df_wide[sim_column]))
+q_lower = np.percentile(aLL_scores, 70)
+q_upper = np.percentile(aLL_scores, 40)
+print(q_lower,q_upper)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from statsmodels.nonparametric.smoothers_lowess import lowess
+def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list"):
+    # Sample N random clusters
+    aLL_scores = np.array(aggregated_df[sim_column])
+    q_lower = 0.9990735650062561#np.percentile(aLL_scores, 70)
+    q_upper = 0.9972202777862549#np.percentile(aLL_scores, 30)
+    
+    sampled_clusters = aggregated_df.sample(n=N)
+
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = aggregated_df['date'].min()
+    global_end_date = aggregated_df['date'].max()
+
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+
+    # Plotting
+    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+
+    if N == 1:
+        axs = [axs]  # Make sure axs is iterable for a single plot
+
+    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+        # Convert Max_Similarities list to a Series with a proper datetime index
+        cluster_timeline = pd.Series(data=row[sim_column],
+                                     index=pd.date_range(start=global_start_date,
+                                                         end=global_end_date))
+
+        # Reindex to the global timeline, filling missing days with NaN, then interpolate
+        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
+
+        # Apply LOESS smoothing
+        smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
+
+        # Plot original and smoothed values
+        ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
+        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+        ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+        ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+
+        ax.set_title(f'Cluster: {row["date"]}-{row["topic_id"]}')
+        ax.set_xlabel('Observation Date')
+        ax.set_ylabel('Max Similarity')
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+visualize_loess_smoothing(df_wide, N=10, alpha=0.03, sim_column = "max_sim_keybert_list")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+np.array(similarity_scores["max_sim_keybert"])
+q1 = np.percentile(scores, 2)
