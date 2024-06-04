@@ -109,7 +109,7 @@ twitter_words = ['rt', 'user']
 combined_stop_words = list(set(english_stop_words + german_stop_words + twitter_words))
 
 # Base representation
-ctfidf_model = ClassTfidfTransformer()
+ctfidf_model =  ClassTfidfTransformer(bm25_weighting = True, reduce_frequent_words=True) #ClassTfidfTransformer()
 
 representation_model = {
     "keybert": KeyBERTInspired(),
