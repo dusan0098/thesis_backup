@@ -1,10 +1,11 @@
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Issues (for discussion with Philipp):
-1. Term weights possibly needed (mmr = ctfidf)
-2. Need to decide how to pick UMAP dimension for similarity score
-3. Need to decide whether to fix the embedding model or pick the same model originally used for the BERTopic object
-4. Need to decide the number of terms being used (all 10? or less - might not be important with weights)
-5. !!! Sentence Embeddings instead of averaging - Just concat the top Terms and put them through the model
+# 1. Term weights possibly needed (mmr = ctfidf)
+# 2. Need to decide how to pick UMAP dimension for similarity score
+# 3. Need to decide whether to fix the embedding model or pick the same model originally used for the BERTopic object
+# 4. Need to decide the number of terms being used (all 10? or less - might not be important with weights)
+# 5. !!! Sentence Embeddings instead of averaging - Just concat the top Terms and put them through the model
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # -*- coding: utf-8 -*-
 import dataiku
@@ -25,12 +26,13 @@ from utils import (
 )
 
 # Recipe inputs
-ed_clusters_with_reps = dataiku.Folder("ifdsjiNI")
+ed_clusters_with_reps = dataiku.Folder("oiEvOl5p")
 ed_clusters_folder_path = ed_clusters_with_reps.get_path()
 
 # Recipe outputs
-ed_similarity_scores = dataiku.Folder("3UTLTl39")
+ed_similarity_scores = dataiku.Folder("0JFzvl2d")
 ed_similarity_folder_path = ed_similarity_scores.get_path()
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 experiment_jsons = load_experiment_jsons(
                             root_folder_path = ed_clusters_folder_path,
@@ -38,166 +40,229 @@ experiment_jsons = load_experiment_jsons(
                             experiment_details_subfolder = "clustering_experiment_details")
 
 # ADD CONDITIONS LATER - FOR NOW USES ALL PREVIOUS RESUTLS
-filtered_jsons = experiment_jsons 
+filtered_jsons = experiment_jsons
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+clusters = load_experiment_objects(experiment_jsons = [filtered_jsons[0]],
+                            file_path_key = "clustering_save_location")[0]
+clusters.head()
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ## Functions for creating cluster Embeddings using representative Terms
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# NEW FUNCTIONS - GPU BASED AND ALLOW FOR WEIGHTS AND SENTENCES
 # Function to generate embeddings for terms using sentence transformer model
-def get_embeddings_for_terms(terms, model):
-    embeddings = model.encode(terms, convert_to_tensor=True)
-    return embeddings.cpu().numpy()
-
-# Function to get the average embedding for a list of terms
-def aggregate_embeddings(terms, model):
-    embeddings = get_embeddings_for_terms(terms, model)
-    return np.mean(embeddings, axis=0) if len(embeddings) > 0 else np.zeros(model.get_sentence_embedding_dimension())
-
-# Use batching
-def get_embeddings_for_batch_terms(terms, model, batch_size=64):
+def get_embeddings(terms_or_sentences, model, batch_size=512, is_sentence=False):
     batch_embeddings = []
-    for i in range(0, len(terms), batch_size):
-        batch_terms = terms[i:i+batch_size]
-        embeddings = get_embeddings_for_terms(batch_terms, model)
-        batch_embeddings.extend(embeddings)
-    return batch_embeddings
+    for i in range(0, len(terms_or_sentences), batch_size):
+        batch = terms_or_sentences[i:i + batch_size]
+        embeddings = model.encode(batch, convert_to_tensor=True, device=device)
+        batch_embeddings.append(embeddings)
+    return torch.cat(batch_embeddings, dim=0)  # Concatenate all batch embeddings
+
+# Function to get the average embedding for a list of terms, optionally using weights
+def aggregate_embeddings(terms, model, weights=None):
+    embeddings = get_embeddings(terms, model)
+    if len(embeddings) == 0:
+        return torch.zeros(model.get_sentence_embedding_dimension(), device=device)
+    if weights is not None:
+        weights = torch.tensor(weights, device=device).unsqueeze(1)
+        weighted_embeddings = embeddings * weights
+        return torch.sum(weighted_embeddings, dim=0) / torch.sum(weights)
+    else:
+        return torch.mean(embeddings, dim=0)
+
+# Helper function to join terms into a sentence
+def join_terms_as_sentence(terms):
+    return ", ".join(terms)
+
+# Function to get sentence embeddings for a batch of sentences
+def get_sentence_embeddings(sentences, model, batch_size=512):
+    return get_embeddings(sentences, model, batch_size, is_sentence=True)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Function to calculate max similarities
 def calculate_max_similarities(clusters_df, cluster_embeddings, n_components=2, reduce=True):
-    # Extract 'date' and 'topic_id' from clusters_df
     cluster_dates = clusters_df['date'].tolist()
     cluster_ids = clusters_df['topic_id'].tolist()
-    
-    embeddings_matrix = np.vstack(cluster_embeddings)
+
+    embeddings_matrix = torch.vstack(tuple(cluster_embeddings)).cpu().numpy()
     if reduce:
-        # Perform UMAP reduction
         print(f"Reducing embeddings to {n_components} dimensions with UMAP...")
         current_time = datetime.now().strftime("%H:%M:%S")
         print("Starting time: ", current_time)
-        
+
         reducer = UMAP(n_components=n_components, random_state=42, metric='cosine')
         reduced_embeddings = reducer.fit_transform(embeddings_matrix)
-        
+
         current_time = datetime.now().strftime("%H:%M:%S")
         print("End time: ", current_time)
     else:
         reduced_embeddings = embeddings_matrix
-    
-    # Normalize reduced embeddings to unit vectors
+
     print(f"Normalising embeddings...")
     norms = np.linalg.norm(reduced_embeddings, axis=1, keepdims=True)
     normalized_embeddings = np.where(norms > 0, reduced_embeddings / norms, 0)
-    
-    # Calculate cosine similarity matrix using dot product on normalized embeddings
+
     print("Calculating cosine similarities...")
     similarity_matrix = np.dot(normalized_embeddings, normalized_embeddings.T)
-    
-    # Create a dictionary to store the max similarities
+
     max_similarity_dict = {}
-    
-    # Iterate over each unique date to find max similarity for topics on each date
     unique_dates = sorted(set(cluster_dates))
-    
+
     for unique_date in unique_dates:
-        # Get indices of clusters that occurred on the unique_date
         indices_on_unique_date = [i for i, date in enumerate(cluster_dates) if date == unique_date]
-        
         for i in range(len(cluster_dates)):
             topic_id = cluster_ids[i]
             date_of_topic = cluster_dates[i]
             similarities = similarity_matrix[i, indices_on_unique_date]
-            
             max_similarity = np.max(similarities)
-            
             max_similarity_dict[(topic_id, date_of_topic, unique_date)] = max_similarity
 
-    # Prepare the result DataFrame
     max_similarity_results = [
         {'topic_id': key[0], 'date': key[1], 'timeline_date': key[2], 'max_similarity': value}
         for key, value in max_similarity_dict.items()
     ]
     max_similarity_df = pd.DataFrame(max_similarity_results)
-    
+
     return max_similarity_df
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Configs and loop over all experiments
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 similarity_configs = [
     {
     "reduce": True,
-    "target_dimension": 5, 
+    "target_dimension": 2,
     ### POSSIBLE CANDIDATES - nr_terms (up to 10), with_weights - True/False, model - if we want to predefine the model
     },
 ]
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-def get_similarity_score_dataframe(clusters,similarity_config,verbose = False):
-    ###SETTING UP PARAMETERS
-    #TODO - Add function to decide which model to use for the similarity score calculation
-    model_name = similarity_config.get("model_name","paraphrase-multilingual-MiniLM-L12-v2")
-    target_dimension = similarity_config.get("target_dimension",5)
+# Placeholder list of dictionaries for representation columns
+similarity_columns_config = [
+    {
+        'representation_column': 'ctfidf_representation',  # Name of the representation column
+        'regular_average': True,  # Whether to calculate regular average similarity
+        'weighted_average': True,  # Whether to calculate weighted average similarity
+        'weight_column': 'ctfidf_scores',  # Column containing the weights for the weighted average
+        'sentence_similarity': True,  # Whether to calculate sentence similarity
+    },
+    {
+        'representation_column': 'keybert_representation',  # Name of the representation column
+        'regular_average': True,  # Whether to calculate regular average similarity
+        'weighted_average': False,  # Whether to calculate weighted average similarity
+        'weight_column': '',  # Column containing the weights for the weighted average (if any)
+        'sentence_similarity': True,  # Whether to calculate sentence similarity
+    },
+    {
+        'representation_column': 'global_tfidf_representation',  # Name of the representation column
+        'regular_average': False,  # Whether to calculate regular average similarity
+        'weighted_average': True,  # Whether to calculate weighted average similarity
+        'weight_column': 'global_tfidf_score',  # Column containing the weights for the weighted average
+        'sentence_similarity': True,  # Whether to calculate sentence similarity
+    },
+    {
+        'representation_column': 'BERTopic_embedding',  # Directly using BERTopic embeddings
+        'direct_similarity': True,
+    }
+]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def get_similarity_score_dataframe(clusters, similarity_config, similarity_columns_config, verbose=False):
+    model_name = similarity_config.get("model_name", "paraphrase-multilingual-MiniLM-L12-v2")
+    target_dimension = similarity_config.get("target_dimension", 2)
     reduce = similarity_config.get("reduce", True)
 
-    # Placeholder sentence transformer model
     model = SentenceTransformer(model_name, device=device)
-
-    # Define the representation columns to use - default - all columns ending with _representation
-    representation_columns = [col for col in clusters.columns if col.endswith('_representation')]
-
-    # Dictionary to store max similarities for each representation
     representation_max_similarities = {}
-    
+
     time_start = time.time()
-    # Calculate embeddings and max similarities for each representation
-    for representation_column in tqdm(representation_columns, desc="Calculating similarity scores"):
+    for config in tqdm(similarity_columns_config, desc="Calculating similarity scores"):
+        representation_column = config['representation_column']
         print(f"Processing {representation_column}...")
 
-        # Generate embeddings for each unique term
-        unique_terms = set(term for terms in clusters[representation_column] for term in terms)
+        if config.get('direct_similarity', False):
+            cluster_embeddings = [torch.tensor(e, device=device) for e in clusters[representation_column]]
+            max_similarity_df = calculate_max_similarities(
+                clusters_df=clusters,
+                cluster_embeddings=cluster_embeddings,
+                reduce=False
+            )
+            representation_name = representation_column
+            max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+            representation_max_similarities[representation_column] = max_similarity_df
+            continue
 
-        # Generate embeddings for the unique terms in batches
-        batch_embeddings = get_embeddings_for_batch_terms(list(unique_terms), model, batch_size=512)
-        term_embeddings = dict(zip(unique_terms, batch_embeddings))
+        if config['regular_average'] or config['weighted_average']:
+            unique_terms = set(term for terms in clusters[representation_column] for term in terms)
+            term_embeddings = get_embeddings(list(unique_terms), model, batch_size=512)
+            term_embeddings_dict = dict(zip(unique_terms, term_embeddings))
 
-        # Calculate average embeddings for each cluster
-        cluster_embeddings = [aggregate_embeddings(terms, model) for terms in clusters[representation_column]]
+        if config['regular_average']:
+            cluster_embeddings = [aggregate_embeddings(terms, model) for terms in clusters[representation_column]]
+            max_similarity_df = calculate_max_similarities(
+                clusters_df=clusters,
+                cluster_embeddings=cluster_embeddings,
+                n_components=target_dimension,
+                reduce=reduce
+            )
+            representation_name = f"{representation_column}_average"
+            max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+            representation_max_similarities[representation_name] = max_similarity_df
 
-        # Calculate max similarities
-        max_similarity_df = calculate_max_similarities(clusters_df=clusters, 
-                                                       cluster_embeddings=cluster_embeddings, 
-                                                       n_components=target_dimension, 
-                                                       reduce=reduce)
+        if config['weighted_average']:
+            weight_column = config['weight_column']
+            cluster_embeddings = [
+                aggregate_embeddings(terms, model, weights=clusters.loc[idx, weight_column])
+                for idx, terms in enumerate(clusters[representation_column])
+            ]
+            max_similarity_df = calculate_max_similarities(
+                clusters_df=clusters,
+                cluster_embeddings=cluster_embeddings,
+                n_components=target_dimension,
+                reduce=reduce
+            )
+            representation_name = f"{representation_column}_weighted"
+            max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+            representation_max_similarities[representation_name] = max_similarity_df
 
-        # Rename similarity column to include the representation name
-        representation_name = representation_column.replace('_representation', '')
-        max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+        if config['sentence_similarity']:
+            cluster_sentences = [join_terms_as_sentence(terms) for terms in clusters[representation_column]]
+            cluster_embeddings = get_sentence_embeddings(cluster_sentences, model, batch_size=512)
+            max_similarity_df = calculate_max_similarities(
+                clusters_df=clusters,
+                cluster_embeddings=cluster_embeddings,
+                n_components=target_dimension,
+                reduce=reduce
+            )
+            representation_name = f"{representation_column}_sentence"
+            max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+            representation_max_similarities[representation_name] = max_similarity_df
 
-        # Store max similarities
-        representation_max_similarities[representation_column] = max_similarity_df
-    
     time_end = time.time()
-    time_taken_minutes = (time_end - time_start)/60
+    time_taken_minutes = (time_end - time_start) / 60
     print(f"TIME TAKEN: {time_taken_minutes} minutes")
-        
-    # Ensure all similarity DataFrames are sorted by 'topic_id', 'date', and 'timeline_date'
+
     for key in representation_max_similarities:
         representation_max_similarities[key].sort_values(by=['topic_id', 'date', 'timeline_date'], inplace=True)
 
-    # Initialize combined_similarity_df with the first similarity DataFrame
-    first_representation_column = representation_columns[0]
+    first_representation_column = list(representation_max_similarities.keys())[0]
     combined_similarity_df = representation_max_similarities[first_representation_column].copy()
 
-        # Loop through the remaining similarity DataFrames and concatenate them
-    if len(representation_columns) > 1:
-        for representation_column in representation_columns[1:]:
-            similarity_column_name = f'max_sim_{representation_column.replace("_representation", "")}'
+    if len(representation_max_similarities) > 1:
+        for representation_column in list(representation_max_similarities.keys())[1:]:
+            similarity_column_name = f'max_sim_{representation_column}'
             combined_similarity_df[similarity_column_name] = representation_max_similarities[representation_column][similarity_column_name]
 
-    # Ensure clusters DataFrame is sorted by 'topic_id' and 'date'
     clusters.sort_values(by=['topic_id', 'date'], inplace=True)
-
     final_df = clusters[['topic_id', 'date']].copy()
-    # Merge combined similarity DataFrame with the clusters DataFrame
     final_df = pd.merge(final_df, combined_similarity_df, left_on=['topic_id', 'date'], right_on=['topic_id', 'date'])
-    
+
     return final_df, time_taken_minutes
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import os
 import json
@@ -208,7 +273,7 @@ def save_similarity_results(similarity_df, similarity_folder_path, pipeline_json
     embedding_json = pipeline_json["embedding_config"]
     embedding_model_name = embedding_json["model_name"]
     embedding_model_name_for_saving = embedding_model_name.replace("/", "-")
-    
+
     # Sanitize similarity_config values for filenames
     similarity_params_str = "_".join([f"{key}{str(value).replace('/', '-')}" for key, value in similarity_config.items()])
 
@@ -236,13 +301,13 @@ def save_similarity_results(similarity_df, similarity_folder_path, pipeline_json
         "period_start": period_start,
         "period_end": period_end,
     }
-    
+
     experiment_details = pipeline_json.copy()
     experiment_details.update({
         "similarity_config": similarity_config,
         "similarity_details": similarity_details
     })
-    
+
     json_save_location = os.path.join(details_subfolder, json_filename)
     with open(json_save_location, 'w') as json_file:
         json.dump(experiment_details, json_file, indent=4)
@@ -258,24 +323,25 @@ device = select_gpu_with_most_free_memory()
 verbose = True
 
 for curr_json in filtered_jsons:
-    clusters = load_experiment_objects(experiment_jsons = [curr_json], 
+    clusters = load_experiment_objects(experiment_jsons = [curr_json],
                             file_path_key = "clustering_save_location")[0]
-    
+
     # Setting date column as first for readability
     cols = list(clusters)
     cols.insert(0, cols.pop(cols.index('date')))
     clusters = clusters.loc[:, cols]
     clusters.head(3)
-    
+
     ##### TODO - REMOVE LINE AFTER TESTING
     #clusters = clusters[:1000]
     #######################################
-    
+
     for similarity_config in similarity_configs:
         # Calculate similarities
         final_df, time_taken = get_similarity_score_dataframe(
                     clusters = clusters,
                     similarity_config = similarity_config,
+                    similarity_columns_config = similarity_columns_config,
                     verbose = verbose
                     )
         # Save the results
@@ -286,6 +352,182 @@ for curr_json in filtered_jsons:
             similarity_config=similarity_config,
             time_taken_minutes=time_taken
         )
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+final_df.describe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#final_df_10 = final_df.copy()
+#final_df_10.describe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#final_df_2 = final_df.copy()
+#final_df_2.describe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#final_df_5 = final_df.copy()
+#final_df_5.describe()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### OLD CODE - START
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# OLD CODE FOR CACLULATING TERMS AND SIMILARITIES - ONLY WORKED FOR STANDARD UNWEIGHTED AVERAGE
+# def get_similarity_score_dataframe(clusters,similarity_config,verbose = False):
+#     ###SETTING UP PARAMETERS
+#     #TODO - Add function to decide which model to use for the similarity score calculation
+#     model_name = similarity_config.get("model_name","paraphrase-multilingual-MiniLM-L12-v2")
+#     target_dimension = similarity_config.get("target_dimension",5)
+#     reduce = similarity_config.get("reduce", True)
+
+#     # Placeholder sentence transformer model
+#     model = SentenceTransformer(model_name, device=device)
+
+#     # Define the representation columns to use - default - all columns ending with _representation
+#     representation_columns = [col for col in clusters.columns if col.endswith('_representation')]
+
+#     # Dictionary to store max similarities for each representation
+#     representation_max_similarities = {}
+
+#     time_start = time.time()
+#     # Calculate embeddings and max similarities for each representation
+#     for representation_column in tqdm(representation_columns, desc="Calculating similarity scores"):
+#         print(f"Processing {representation_column}...")
+
+#         # Generate embeddings for each unique term
+#         unique_terms = set(term for terms in clusters[representation_column] for term in terms)
+
+#         # Generate embeddings for the unique terms in batches
+#         batch_embeddings = get_embeddings_for_batch_terms(list(unique_terms), model, batch_size=512)
+#         term_embeddings = dict(zip(unique_terms, batch_embeddings))
+
+#         # Calculate average embeddings for each cluster
+#         cluster_embeddings = [aggregate_embeddings(terms, model) for terms in clusters[representation_column]]
+
+#         # Calculate max similarities
+#         max_similarity_df = calculate_max_similarities(clusters_df=clusters,
+#                                                        cluster_embeddings=cluster_embeddings,
+#                                                        n_components=target_dimension,
+#                                                        reduce=reduce)
+
+#         # Rename similarity column to include the representation name
+#         representation_name = representation_column.replace('_representation', '')
+#         max_similarity_df.rename(columns={'max_similarity': f'max_sim_{representation_name}'}, inplace=True)
+
+#         # Store max similarities
+#         representation_max_similarities[representation_column] = max_similarity_df
+
+#     time_end = time.time()
+#     time_taken_minutes = (time_end - time_start)/60
+#     print(f"TIME TAKEN: {time_taken_minutes} minutes")
+
+#     # Ensure all similarity DataFrames are sorted by 'topic_id', 'date', and 'timeline_date'
+#     for key in representation_max_similarities:
+#         representation_max_similarities[key].sort_values(by=['topic_id', 'date', 'timeline_date'], inplace=True)
+
+#     # Initialize combined_similarity_df with the first similarity DataFrame
+#     first_representation_column = representation_columns[0]
+#     combined_similarity_df = representation_max_similarities[first_representation_column].copy()
+
+#         # Loop through the remaining similarity DataFrames and concatenate them
+#     if len(representation_columns) > 1:
+#         for representation_column in representation_columns[1:]:
+#             similarity_column_name = f'max_sim_{representation_column.replace("_representation", "")}'
+#             combined_similarity_df[similarity_column_name] = representation_max_similarities[representation_column][similarity_column_name]
+
+#     # Ensure clusters DataFrame is sorted by 'topic_id' and 'date'
+#     clusters.sort_values(by=['topic_id', 'date'], inplace=True)
+
+#     final_df = clusters[['topic_id', 'date']].copy()
+#     # Merge combined similarity DataFrame with the clusters DataFrame
+#     final_df = pd.merge(final_df, combined_similarity_df, left_on=['topic_id', 'date'], right_on=['topic_id', 'date'])
+
+#     return final_df, time_taken_minutes
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Function to generate embeddings for terms using sentence transformer model
+# def get_embeddings_for_terms(terms, model):
+#     embeddings = model.encode(terms, convert_to_tensor=True)
+#     return embeddings.cpu().numpy()
+
+# # Function to get the average embedding for a list of terms
+# def aggregate_embeddings(terms, model):
+#     embeddings = get_embeddings_for_terms(terms, model)
+#     return np.mean(embeddings, axis=0) if len(embeddings) > 0 else np.zeros(model.get_sentence_embedding_dimension())
+
+# Use batching
+# def get_embeddings_for_batch_terms(terms, model, batch_size=64):
+#     batch_embeddings = []
+#     for i in range(0, len(terms), batch_size):
+#         batch_terms = terms[i:i+batch_size]
+#         embeddings = get_embeddings_for_terms(batch_terms, model)
+#         batch_embeddings.extend(embeddings)
+#     return batch_embeddings
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# OLD CODE 
+# def calculate_max_similarities(clusters_df, cluster_embeddings, n_components=2, reduce=True):
+#     # Extract 'date' and 'topic_id' from clusters_df
+#     cluster_dates = clusters_df['date'].tolist()
+#     cluster_ids = clusters_df['topic_id'].tolist()
+
+#     # OLD VERSION - when using numpy durring averaging 
+# #   embeddings_matrix = np.vstack(cluster_embeddings)
+#     embeddings_matrix = torch.vstack(cluster_embeddings).cpu().numpy()
+#     if reduce:
+#         # Perform UMAP reduction
+#         print(f"Reducing embeddings to {n_components} dimensions with UMAP...")
+#         current_time = datetime.now().strftime("%H:%M:%S")
+#         print("Starting time: ", current_time)
+
+#         reducer = UMAP(n_components=n_components, random_state=42, metric='cosine')
+#         reduced_embeddings = reducer.fit_transform(embeddings_matrix)
+
+#         current_time = datetime.now().strftime("%H:%M:%S")
+#         print("End time: ", current_time)
+#     else:
+#         reduced_embeddings = embeddings_matrix
+
+#     # Normalize reduced embeddings to unit vectors
+#     print(f"Normalising embeddings...")
+#     norms = np.linalg.norm(reduced_embeddings, axis=1, keepdims=True)
+#     normalized_embeddings = np.where(norms > 0, reduced_embeddings / norms, 0)
+
+#     # Calculate cosine similarity matrix using dot product on normalized embeddings
+#     print("Calculating cosine similarities...")
+#     similarity_matrix = np.dot(normalized_embeddings, normalized_embeddings.T)
+
+#     # Create a dictionary to store the max similarities
+#     max_similarity_dict = {}
+
+#     # Iterate over each unique date to find max similarity for topics on each date
+#     unique_dates = sorted(set(cluster_dates))
+
+#     for unique_date in unique_dates:
+#         # Get indices of clusters that occurred on the unique_date
+#         indices_on_unique_date = [i for i, date in enumerate(cluster_dates) if date == unique_date]
+
+#         for i in range(len(cluster_dates)):
+#             topic_id = cluster_ids[i]
+#             date_of_topic = cluster_dates[i]
+#             similarities = similarity_matrix[i, indices_on_unique_date]
+
+#             max_similarity = np.max(similarities)
+
+#             max_similarity_dict[(topic_id, date_of_topic, unique_date)] = max_similarity
+
+#     # Prepare the result DataFrame
+#     max_similarity_results = [
+#         {'topic_id': key[0], 'date': key[1], 'timeline_date': key[2], 'max_similarity': value}
+#         for key, value in max_similarity_dict.items()
+#     ]
+#     max_similarity_df = pd.DataFrame(max_similarity_results)
+
+#     return max_similarity_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### OLD CODE - END
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # # Ensure all similarity DataFrames are sorted by 'topic_id', 'date', and 'timeline_date'
 # for key in representation_max_similarities:
@@ -307,6 +549,7 @@ for curr_json in filtered_jsons:
 # final_df = clusters[['topic_id', 'date']].copy()
 # # Merge combined similarity DataFrame with the clusters DataFrame
 # final_df = pd.merge(final_df, combined_similarity_df, left_on=['topic_id', 'date'], right_on=['topic_id', 'date'])
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # from umap import UMAP
 # import numpy as np
@@ -318,31 +561,31 @@ for curr_json in filtered_jsons:
 #     # Extract 'date' and 'topic_id' from clusters_df
 #     cluster_dates = clusters_df['date'].tolist()
 #     cluster_ids = clusters_df['topic_id'].tolist()
-    
+
 #     embeddings_matrix = np.vstack(cluster_embeddings)
 #     if reduce:
 #         # Perform UMAP reduction
 #         print(f"Reducing embeddings to {n_components} dimensions with UMAP...")
 #         current_time = datetime.now().strftime("%H:%M:%S")
 #         print("Starting time: ", current_time)
-        
+
 #         reducer = UMAP(n_components=n_components, random_state=42, metric='cosine')
 #         reduced_embeddings = reducer.fit_transform(embeddings_matrix)
-        
+
 #         current_time = datetime.now().strftime("%H:%M:%S")
 #         print("End time: ", current_time)
 #     else:
 #         reduced_embeddings = embeddings_matrix
-    
+
 #     # Normalize reduced embeddings to unit vectors
 #     print(f"Normalizing embeddings...")
 #     norms = np.linalg.norm(reduced_embeddings, axis=1, keepdims=True)
 #     normalized_embeddings = np.where(norms > 0, reduced_embeddings / norms, 0)
-    
+
 #     # Calculate cosine similarity matrix using dot product on normalized embeddings
 #     print("Calculating cosine similarities...")
 #     similarity_matrix = np.dot(normalized_embeddings, normalized_embeddings.T)
-    
+
 #     print("Calculating max similarities...")
 #     max_similarity_results = []
 
@@ -372,7 +615,7 @@ for curr_json in filtered_jsons:
 #             })
 
 #     max_similarity_df = pd.DataFrame(max_similarity_results)
-    
+
 #     return max_similarity_df
 
 # OLD CODE FOR SINGLE COLUMN CALCULATION
@@ -386,7 +629,7 @@ for curr_json in filtered_jsons:
 # # Calculate average embeddings for each cluster
 # cluster_embeddings = [aggregate_embeddings(terms) for terms in clusters_df[representation_column]]
 
-# similarity_scores_df = calculate_max_similarities(clusters_df = clusters, 
-#                                               cluster_embeddings = cluster_embeddings, 
-#                                               n_components = target_dimension, 
+# similarity_scores_df = calculate_max_similarities(clusters_df = clusters,
+#                                               cluster_embeddings = cluster_embeddings,
+#                                               n_components = target_dimension,
 #                                               reduce = reduce)
