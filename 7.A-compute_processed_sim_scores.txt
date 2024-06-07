@@ -1,3 +1,10 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### SIMILARITY IDEAS
+# 1. Try to extract KeyBERT scores and do weighted sim
+# 2. Use sim with "" as baseline 
+# 3. Use max_sim of topics in the same period as threshold
+# 4. Forbenius/Nuclear norm - L1/L2 for matrix - Use it as scaling factor prior to Clustering (HDBSCAN)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # -*- coding: utf-8 -*-
 import dataiku
@@ -30,7 +37,7 @@ experiment_jsons = load_experiment_jsons(
 
 # Add filters if necessary
 filtered_jsons = [experiment_jsons[0]]
-filtered_jsons
+#filtered_jsons
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 device = select_gpu_with_most_free_memory()
@@ -41,67 +48,15 @@ for curr_json in filtered_jsons:
     
     clusters_df = load_experiment_objects(experiment_jsons = [curr_json],
                             file_path_key = "clustering_save_location")[0]
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-pd.set_option('display.max_colwidth',3000)
-clusters_df.tail(10)[["ctfidf_representation","keybert_representation"]]#.values
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-#similarity_scores[similarity_scores["date"]==pd.Timestamp("2020-04-24")]
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-def plot_global_distribution(data, column_name):
-    """
-    Plot the global distribution of a column's values.
-    :param data: DataFrame containing the data.
-    :param column_name: Name of the column to plot.
-    """
-    plt.figure(figsize=(10, 6))
-    sns.histplot(data[column_name], kde=True)
-    plt.title(f'Distribution of {column_name}')
-    plt.xlabel(column_name)
-    plt.ylabel('Frequency')
-    plt.show()
-
-# Example usage
-#plot_global_distribution(similarity_scores, 'max_sim_keybert')
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-def enhanced_robust_scale_scores(scores):
-    """
-    Scale the scores robustly using quantiles for the lower bound and fix the upper bound to 1.
-    :param scores: A list or array of similarity scores.
-    :return: Scaled scores as a numpy array.
-    """
-    q1 = np.percentile(scores, 3)#1   # 1st percentile for lower bound
-    max_value = 1.0  # Fix the upper bound to 1
-
-    # Clip scores to quantile range for lower bound only
-    scores_clipped = np.clip(scores, q1, max_value)
     
-    # Scale scores to 0-1 range
-    scaled_scores = (scores_clipped - q1) / (max_value - q1)
-    
-    return scaled_scores
+    # Ensure 'clusters_df' has the correct column order
+    primary_columns = ['topic_id', 'date', 'cluster_size']
+    secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
+    clusters_df = clusters_df[primary_columns + secondary_columns]
 
-# Example usage
-scores = np.array(similarity_scores["max_sim_keybert"])  # Example similarity scores
-#scaled_scores = enhanced_robust_scale_scores(scores)
-
-# Plotting the scaled scores to visualize the distribution
-# plt.figure(figsize=(10, 6))
-# sns.histplot(scaled_scores, kde=True)
-# plt.title('Distribution of Scaled Similarity Scores')
-# plt.xlabel('Scaled Similarity Score')
-# plt.ylabel('Frequency')
-# plt.show()
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#pd.set_option('display.max_colwidth',3000)
+clusters_df.tail(3)[["ctfidf_representation","keybert_representation"]]#.values
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 print(len(similarity_scores))
@@ -110,16 +65,17 @@ print("Unique Clusters * days:", 8073 * 480)
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 #similarity_scores= similarity_scores[similarity_scores["timeline_date"]!=pd.Timestamp("2019-01-02")]
 
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+similarity_scores.head(3)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Imputing values for missing dates
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 df = similarity_scores.copy()
-sim_columns = ['max_sim_ctfidf', 'max_sim_keybert']
+sim_columns = [col for col in df.columns if col.startswith('max_sim_')]
 
-# Convert date columns to datetime
-df['date'] = pd.to_datetime(df['date'])
-df['timeline_date'] = pd.to_datetime(df['timeline_date'])
+# Sorting values
 df.sort_values(['date', 'topic_id', 'timeline_date'], inplace=True)
 
 # Determine full timeline
@@ -158,11 +114,202 @@ df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
 df_wide.sort_values(['date', 'topic_id'], inplace=True)
 
 # Display the wide DataFrame
-print(df_wide.head())
+pd.reset_option('display.max_colwidth') 
+df_wide.head(3)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 #len(df_wide.iloc[0]["max_sim_keybert_list"])
-df_wide.max_sim_ctfidf_list.str.len().value_counts()
+timeline_columns = [col for col in df_wide.columns if col.endswith('_list')]
+for column in timeline_columns:
+    print("Column name:", column)
+    print(df_wide[column].str.len().value_counts())
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+df_wide.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+import numpy as np
+from collections import Counter
+
+def find_lowest_dates(aggregated_df, sim_column="max_sim_keybert_representation_average_list"):
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = aggregated_df['date'].min()
+    global_end_date = aggregated_df['date'].max()
+
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+
+    # Dictionary to store the counts of dates appearing in the lowest 10 values
+    date_counts = Counter()
+
+    # Iterate through each row in the DataFrame
+    for _, row in aggregated_df.iterrows():
+        # Convert Max_Similarities list to a Series with a proper datetime index
+        cluster_timeline = pd.Series(data=row[sim_column],
+                                     index=pd.date_range(start=global_start_date,
+                                                         end=global_end_date))
+
+        # Reindex to the global timeline, filling missing days with NaN, then interpolate
+        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
+
+        # Find the dates of the 10 lowest values
+        lowest_dates = cluster_timeline.nsmallest(10).index
+
+        # Update the counts for these dates
+        date_counts.update(lowest_dates)
+
+    # Convert the Counter to a DataFrame for easier sorting and display
+    date_counts_df = pd.DataFrame.from_dict(date_counts, orient='index', columns=['count'])
+    date_counts_df.index.name = 'date'
+    date_counts_df.reset_index(inplace=True)
+
+    # Sort by count in descending order for better legibility
+    date_counts_df.sort_values(by='count', ascending=False, inplace=True)
+
+    return date_counts_df
+
+# Usage example
+lowest_dates_df = find_lowest_dates(aggregated_df  = df_wide, sim_column="max_sim_keybert_representation_average_list")
+
+# Display the sorted DataFrame
+lowest_dates_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+clusters_df[clusters_df["date"]==datetime.date(2019,4,18)].ctfidf_representation.values
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from statsmodels.nonparametric.smoothers_lowess import lowess
+import datetime
+
+def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list"):    
+    aLL_scores = np.array(np.concatenate(aggregated_df[sim_column]))
+    q_lower = np.percentile(aLL_scores, 70) # higher makes it easier
+    q_upper = np.percentile(aLL_scores, 40) # lower makes it easier
+
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = aggregated_df['date'].min()
+    global_end_date = aggregated_df['date'].max()
+
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    # TESTING FILTER
+    filter_date = datetime.date(2020, 2, 5)
+    aggregated_df = aggregated_df[aggregated_df["date"] == filter_date]
+    
+    # Sample N random clusters
+    sampled_clusters = aggregated_df.sample(n=N,replace=False)
+
+    # Plotting
+    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+
+    if N == 1:
+        axs = [axs]  # Make sure axs is iterable for a single plot
+
+    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+        # Convert Max_Similarities list to a Series with a proper datetime index
+        cluster_timeline = pd.Series(data=row[sim_column],
+                                     index=pd.date_range(start=global_start_date,
+                                                         end=global_end_date))
+
+        # Reindex to the global timeline, filling missing days with NaN, then interpolate
+        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
+
+        # Apply LOESS smoothing
+        smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
+
+        # Plot original and smoothed values
+        ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
+        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+        ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+        ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+        ax.vlines(x = filter_date, ymin =smoothed_values.min(), ymax = smoothed_values.max(), linewidth=1, color='green')
+
+        ax.set_title(f'{row["date"]}-{row["ctfidf_representation"][:6]}')
+        ax.set_xlabel('Observation Date')
+        ax.set_ylabel('Max Similarity')
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+sim_column = "max_sim_keybert_representation_average_list"
+aLL_scores = np.array(np.concatenate(df_wide[sim_column]))
+q_lower = np.percentile(aLL_scores, 70)
+q_upper = np.percentile(aLL_scores, 40)
+print(q_lower,q_upper)
+
+
+df_test = df_wide.copy()
+visualize_loess_smoothing(df_test, N=5, alpha=0.04, sim_column = sim_column)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### VISUALISATIONS FOR THESIS
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Visualising the disritubtion of similarity scores
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_global_distribution(data, column_name):
+    """
+    Plot the global distribution of a column's values.
+    :param data: DataFrame containing the data.
+    :param column_name: Name of the column to plot.
+    """
+    plt.figure(figsize=(10, 6))
+    sns.histplot(data[column_name], kde=True)
+    plt.title(f'Distribution of {column_name}')
+    plt.xlabel(column_name)
+    plt.ylabel('Frequency')
+    plt.show()
+
+# Example usage
+#sim_column = "max_sim_keybert_representation_average_list"
+#plot_global_distribution(similarity_scores, sim_column)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Visualising the disritubtion of similarity scores if we perform Clipping with quantiles
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def enhanced_robust_scale_scores(scores):
+    """
+    Scale the scores robustly using quantiles for the lower bound and fix the upper bound to 1.
+    :param scores: A list or array of similarity scores.
+    :return: Scaled scores as a numpy array.
+    """
+    q1 = np.percentile(scores, 3)#1   # 1st percentile for lower bound
+    max_value = 1.0  # Fix the upper bound to 1
+
+    # Clip scores to quantile range for lower bound only
+    scores_clipped = np.clip(scores, q1, max_value)
+    
+    # Scale scores to 0-1 range
+    scaled_scores = (scores_clipped - q1) / (max_value - q1)
+    
+    return scaled_scores
+
+# Example usage
+scores = np.array(similarity_scores["max_sim_keybert_representation_average"])  # Example similarity scores
+#scaled_scores = enhanced_robust_scale_scores(scores)
+
+# Plotting the scaled scores to visualize the distribution
+# plt.figure(figsize=(10, 6))
+# sns.histplot(scaled_scores, kde=True)
+# plt.title('Distribution of Scaled Similarity Scores')
+# plt.xlabel('Scaled Similarity Score')
+# plt.ylabel('Frequency')
+# plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### OLD CODE
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # OLD CODE - HAD TO DROP UNNECESSARY COMBINATIONS
@@ -210,80 +357,3 @@ df_wide.max_sim_ctfidf_list.str.len().value_counts()
 
 # # Display the wide DataFrame
 # df_wide.head()
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide["date"] = pd.to_datetime(df_wide['date'], utc=True)
-clusters_df["date"] = pd.to_datetime(clusters_df['date'], utc=True)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide.head(3)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-from statsmodels.nonparametric.smoothers_lowess import lowess
-def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list"):    
-    aLL_scores = np.array(np.concatenate(aggregated_df[sim_column]))
-    q_lower = np.percentile(aLL_scores, 70) # higher makes it easier
-    q_upper = np.percentile(aLL_scores, 40) # lower makes it easier
-
-    # Extract the global start and end dates from the DataFrame
-    global_start_date = aggregated_df['date'].min()
-    global_end_date = aggregated_df['date'].max()
-
-    # Generate a timeline from the global start to end date
-    timeline = pd.date_range(start=global_start_date, end=global_end_date)
-    
-    # TESTING FILTER
-    aggregated_df = aggregated_df[aggregated_df["date"]==pd.Timestamp("2020-02-06 00:00:00+00:00")]
-    
-    # Sample N random clusters
-    sampled_clusters = aggregated_df.sample(n=N,replace=False)
-
-    # Plotting
-    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
-
-    if N == 1:
-        axs = [axs]  # Make sure axs is iterable for a single plot
-
-    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
-        # Convert Max_Similarities list to a Series with a proper datetime index
-        cluster_timeline = pd.Series(data=row[sim_column],
-                                     index=pd.date_range(start=global_start_date,
-                                                         end=global_end_date))
-
-        # Reindex to the global timeline, filling missing days with NaN, then interpolate
-        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
-
-        # Apply LOESS smoothing
-        smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
-
-        # Plot original and smoothed values
-        ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
-        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
-        ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
-        ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
-
-        ax.set_title(f'{row["date"].date()}-{row["ctfidf_representation"][:6]}')
-        ax.set_xlabel('Observation Date')
-        ax.set_ylabel('Max Similarity')
-        ax.legend()
-
-    plt.tight_layout()
-    plt.show()
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-sim_column = "max_sim_ctfidf_list"
-aLL_scores = np.array(np.concatenate(df_wide[sim_column]))
-q_lower = np.percentile(aLL_scores, 70)
-q_upper = np.percentile(aLL_scores, 40)
-print(q_lower,q_upper)
-
-
-df_test = df_wide.copy()
-visualize_loess_smoothing(df_test, N=10, alpha=0.03, sim_column = sim_column)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-np.array(similarity_scores["max_sim_keybert"])
-q1 = np.percentile(scores, 2)
