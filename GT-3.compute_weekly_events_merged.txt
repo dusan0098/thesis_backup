@@ -170,6 +170,9 @@ def create_weekly_prompt(week_events):
 #     """
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+type(event_df.topic_id.iloc[0])
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def get_request_with_backoff(messages, deployment_name, openai_config, max_attempts=3):
     for attempt in range(max_attempts):
         try:
@@ -212,7 +215,7 @@ def get_request_with_backoff(messages, deployment_name, openai_config, max_attem
     return {"merged_topics": []}
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-from datetime import timedelta
+from datetime import datetime
 import random
 # Function to process weekly events
 def process_weekly_events(week_events):
@@ -232,6 +235,8 @@ event_df['all_ids'] = None
 # Process each week
 weekly_results = []
 
+# event_df = event_df[event_df['start_date'] >= pd.Timestamp(YEAR, MONTH, DAY)]
+
 # Group events by start_date and end_date
 event_df_grouped = event_df.groupby(['start_date', 'end_date'])
 
@@ -241,6 +246,7 @@ for (start_date, end_date), week_events in tqdm(event_df_grouped, desc="Processi
         response = process_weekly_events(week_events)
         # Extract merged_topics from the response
         merged_topics = response.get("merged_topics", [])
+        print(response)
 
         for topic in merged_topics:
             redundant_ids = topic.get("redundant_ids", [])
@@ -248,6 +254,12 @@ for (start_date, end_date), week_events in tqdm(event_df_grouped, desc="Processi
                 continue
             
             all_ids = [topic["topic_id"]] + redundant_ids
+            
+            # Check if all_ids are valid
+            valid_ids = [topic_id for topic_id in all_ids if not event_df[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date)].empty]
+            if len(valid_ids) != len(all_ids):
+                print(f"GPT hallucinated IDs in response: {all_ids}. Skipping these IDs.")
+                continue
             
             # Determine the main_id by finding the largest cluster
             sizes = {topic_id: event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'cluster_size'].iloc[0]
