@@ -10,7 +10,13 @@
 import dataiku
 import pandas as pd, numpy as np
 from dataiku import pandasutils as pdu
-from datetime import datetime
+from datetime import datetime, timedelta
+import os
+import json
+import time
+from statsmodels.nonparametric.smoothers_lowess import lowess
+from joblib import Parallel, delayed
+from tqdm import tqdm
 from utils import (
     select_gpu_with_most_free_memory,
     load_experiment_jsons,
@@ -26,8 +32,8 @@ ed_similarity_scores = dataiku.Folder("0JFzvl2d")
 ed_similarity_scores_path = ed_similarity_scores.get_path()
 
 # Write recipe outputs
-ed_similarity_scores_processed = dataiku.Folder("hZfSC2LV")
-ed_similarity_scores_processed_info = ed_similarity_scores_processed.get_path()
+ed_bump_detection = dataiku.Folder("hZfSC2LV")
+ed_bump_detection_folder_path = ed_bump_detection.get_path()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 experiment_jsons = load_experiment_jsons(
@@ -36,91 +42,57 @@ experiment_jsons = load_experiment_jsons(
                             experiment_details_subfolder = "similarity_experiment_details")
 
 # Add filters if necessary
-filtered_jsons = original_experiments = [e for e in experiment_jsons if
-                       (e["similarity_config"]["target_dimension"] == 10)]
-len(filtered_jsons)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-device = select_gpu_with_most_free_memory()
-
-for curr_json in filtered_jsons:
-    similarity_scores = load_experiment_objects(experiment_jsons = [curr_json],
-                            file_path_key = "similarity_save_location")[0]
-    
-    clusters_df = load_experiment_objects(experiment_jsons = [curr_json],
-                            file_path_key = "clustering_save_location")[0]
-    
-    # Ensure 'clusters_df' has the correct column order
-    primary_columns = ['topic_id', 'date', 'cluster_size']
-    secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
-    clusters_df = clusters_df[primary_columns + secondary_columns]
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-#pd.set_option('display.max_colwidth',3000)
-clusters_df.tail(3)[["ctfidf_representation","keybert_representation"]]#.values
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-print(len(similarity_scores))
-print("Unique Clusters * days:", 8073 * 480)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-similarity_scores.head(3)
+filtered_jsons = [e for e in experiment_jsons if
+                (e["similarity_config"]["target_dimension"] == 10)]
+print("Total number of experiments after filtering: ", len(filtered_jsons))
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Imputing values for missing dates
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df = similarity_scores.copy()
-sim_columns = [col for col in df.columns if col.startswith('max_sim_')]
+def construct_df_wide(similarity_scores):
+    df = similarity_scores.copy()
+    sim_columns = [col for col in df.columns if col.startswith('max_sim_')]
 
-# Sorting values
-df.sort_values(['date', 'topic_id', 'timeline_date'], inplace=True)
+    # Sorting values
+    df.sort_values(['date', 'topic_id', 'timeline_date'], inplace=True)
 
-# Determine full timeline
-full_timeline = pd.date_range(start=df['timeline_date'].min(), end=df['timeline_date'].max(), freq='D')
+    # Determine full timeline
+    full_timeline = pd.date_range(start=df['timeline_date'].min(), end=df['timeline_date'].max(), freq='D')
 
-# Create a multi-index with only existing combinations of topic_id, date, and the full timeline
-all_combinations = pd.MultiIndex.from_tuples(
-    [(topic_id, date, timeline_date) for (topic_id, date) in df[['topic_id', 'date']].drop_duplicates().itertuples(index=False)
-     for timeline_date in full_timeline],
-    names=['topic_id', 'date', 'timeline_date']
-)
+    # Create a multi-index with only existing combinations of topic_id, date, and the full timeline
+    all_combinations = pd.MultiIndex.from_tuples(
+        [(topic_id, date, timeline_date) for (topic_id, date) in df[['topic_id', 'date']].drop_duplicates().itertuples(index=False)
+         for timeline_date in full_timeline],
+        names=['topic_id', 'date', 'timeline_date']
+    )
 
-# Reindex the DataFrame to ensure all combinations are present
-df.set_index(['topic_id', 'date', 'timeline_date'], inplace=True)
-df = df.reindex(all_combinations)
+    # Reindex the DataFrame to ensure all combinations are present
+    df.set_index(['topic_id', 'date', 'timeline_date'], inplace=True)
+    df = df.reindex(all_combinations)
 
-# Interpolate missing values within each (topic_id, date) combination, ensuring correct order
-def interpolate_group(group):
-    group = group.sort_index()  # Ensure sorting by timeline_date within each group
-    group[sim_columns] = group[sim_columns].interpolate(method='linear')
-    return group
+    # Interpolate missing values within each (topic_id, date) combination, ensuring correct order
+    def interpolate_group(group):
+        group = group.sort_index()  # Ensure sorting by timeline_date within each group
+        group[sim_columns] = group[sim_columns].interpolate(method='linear')
+        return group
 
-df = df.groupby(['topic_id', 'date']).apply(interpolate_group)
+    df = df.groupby(['topic_id', 'date']).apply(interpolate_group)
 
-# Reset index to prepare for pivot
-df.reset_index(inplace=True)
+    # Reset index to prepare for pivot
+    df.reset_index(inplace=True)
 
-# Transform to wide format: create lists of scores for each (topic_id, date) combination
-def aggregate_scores(group):
-    return pd.Series({f'{col}_list': group[col].tolist() for col in sim_columns})
+    # Transform to wide format: create lists of scores for each (topic_id, date) combination
+    def aggregate_scores(group):
+        return pd.Series({f'{col}_list': group[col].tolist() for col in sim_columns})
 
-# Apply the aggregation
-df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
+    # Apply the aggregation
+    df_wide = df.groupby(['topic_id', 'date']).apply(aggregate_scores).reset_index()
 
-# Sort in order of topics
-df_wide.sort_values(['date', 'topic_id'], inplace=True)
-
-# Display the wide DataFrame
-pd.reset_option('display.max_colwidth') 
-df_wide.head(3)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-#len(df_wide.iloc[0]["max_sim_keybert_list"])
-timeline_columns = [col for col in df_wide.columns if col.endswith('_list')]
-for column in timeline_columns:
-    print("Column name:", column)
-    print(df_wide[column].str.len().value_counts())
+    # Sort in order of topics
+    df_wide.sort_values(['date', 'topic_id'], inplace=True)
+    
+    return df_wide
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### BUMP DETECTION FUNCTION
@@ -189,7 +161,8 @@ def detect_bumps_in_series(lower_threshold, upper_threshold, timeline, smoothed_
                             'first_above_upper_date': first_above_upper_date,
                             'peak_date': bump_peak_date,
                             'peak_value': bump_peak_value,
-                            'end_date': bump_end_date
+                            'end_date': bump_end_date,
+                            'days_above_upper': days_above_upper,
                         })
                     # Reset all variables for the next potential bump
                     current_trend = 'waiting'
@@ -206,13 +179,6 @@ def detect_bumps_in_series(lower_threshold, upper_threshold, timeline, smoothed_
     return bumps
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import pandas as pd
-import numpy as np
-from statsmodels.nonparametric.smoothers_lowess import lowess
-from joblib import Parallel, delayed
-from tqdm import tqdm
-from datetime import datetime, timedelta
-
 def loess_smoothing_single(df, col, alpha):
     def smooth_row(row):
         return lowess(row, np.arange(len(row)), frac=alpha)[:, 1]
@@ -229,12 +195,14 @@ def calculate_quantiles_from_smoothed(smoothed_values, quantiles):
     assert lower_threshold < upper_threshold
     return lower_threshold, upper_threshold
 
-def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 0.7), min_days_above_upper=7, max_bump_width=45):
+def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 0.7), min_days_above_upper=5, max_bump_width=45):
     bump_records = []
     
     global_start_date = df_wide['date'].min()
     global_end_date = df_wide['date'].max()
     timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    start_time = time.time()
 
     for col in tqdm(timeline_columns, desc="Processing columns"):
         for alpha in tqdm(alpha_values, desc="Processing alphas"):
@@ -246,14 +214,24 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                 bumps = detect_bumps_in_series(lower_threshold, upper_threshold, timeline, \
                                                smoothed_row_values, min_days_above_upper, max_bump_width)
                 has_bumps = len(bumps) > 0
-                largest_bump_peak_date = None
                 closest_bump_peak_date = None
+                closest_bump_peak_value = None
+                total_bumps = len(bumps)
+                closest_bump_width = None
+                closest_bump_time_above_upper = None
+                largest_bump_peak_date = None
+                largest_bump_peak_value = None
 
-                if has_bumps:
-                    largest_bump = max(bumps, key=lambda x: x['peak_value'])
-                    largest_bump_peak_date = largest_bump['peak_date']
+                if has_bumps:                    
                     closest_bump = min(bumps, key=lambda x: abs(x['peak_date'] - row['date']))
                     closest_bump_peak_date = closest_bump['peak_date']
+                    closest_bump_peak_value = closest_bump['peak_value']
+                    closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
+                    closest_bump_time_above_upper = closest_bump['days_above_upper']
+                    
+                    largest_bump = max(bumps, key=lambda x: x['peak_value'])
+                    largest_bump_peak_date = largest_bump['peak_date']
+                    largest_bump_peak_value = largest_bump['peak_value']
 
                 bump_records.append({
                     'topic_id': row['topic_id'],
@@ -261,61 +239,162 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                     'similarity_column': col,
                     'alpha': alpha,
                     'has_bumps': has_bumps,
+                    'total_bumps': total_bumps,
+                    'closest_bump_peak_date': closest_bump_peak_date,
+                    'closest_bump_peak_value': closest_bump_peak_value,
+                    'closest_bump_width': closest_bump_width,
+                    'closest_bump_time_above_upper': closest_bump_time_above_upper,
                     'largest_bump_peak_date': largest_bump_peak_date,
-                    'closest_bump_peak_date': closest_bump_peak_date
+                    'largest_bump_peak_value': largest_bump_peak_value
                 })
+                
+    end_time = time.time()  
+    time_taken_minutes = (end_time - start_time) / 60 
 
     bump_df = pd.DataFrame(bump_records)
-    return bump_df
-
-
-# Example usage
-timeline_columns = [col for col in df_wide.columns if col.endswith('_list')]
-timeline_columns = timeline_columns[5:7]
-alpha_values = [0.02, 0.03, 0.04]#, 0.04, 0.05]
-
-# Detect bumps with additional parameters for minimum days above upper threshold and maximum bump width
-bump_df = detect_bumps_in_df(df_wide, 
-                             timeline_columns, 
-                             alpha_values, 
-                             quantiles=(0.30, 0.70), 
-                             min_days_above_upper=5, 
-                             max_bump_width=45)
-
-# Display the new DataFrame with bump information
-bump_df.head(3)
+    return bump_df, time_taken_minutes
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-#df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
-detected_df = bump_df[bump_df["has_bumps"] == True]
-detected_df = detected_df.merge(clusters_df, on=["topic_id","date"])
-detected_df
+def get_serializable_config(config):
+    """
+    Converts the configuration into a JSON-serializable format.
+    """
+    serializable_config = {}
+    for key, value in config.items():
+        if isinstance(value, list):
+            # For lists, apply str() to each element to get a serializable list of descriptions
+            serializable_config[key] = [str(v) for v in value]
+        else:
+            # Apply str() to get a serializable description
+            serializable_config[key] = str(value)
+    return serializable_config
+
+def save_bump_detection_results(bump_df, bump_detection_folder_path, pipeline_json, bump_detection_config, time_taken_minutes):
+    # Extract embedding model name
+    embedding_model_name = pipeline_json["embedding_config"]["model_name"] 
+    embedding_model_name_for_saving = embedding_model_name.replace("/", "-")
+
+    # Create string from config_values
+    bump_detection_params_str = "_".join([f"{key}{str(value).replace('/', '-')}" for key, value in bump_detection_config.items()])
+
+    # Create subfolders for bump detection results and JSON files
+    results_subfolder = os.path.join(bump_detection_folder_path, "bump_detection_results")
+    details_subfolder = os.path.join(bump_detection_folder_path, "bump_detection_experiment_details")
+    os.makedirs(results_subfolder, exist_ok=True)
+    os.makedirs(details_subfolder, exist_ok=True)
+
+    # Prepare file names
+    unix_timestamp, current_time = get_current_time_and_unix_timestamp()
+    bump_filename = f"bump_{embedding_model_name_for_saving}_{bump_detection_params_str}_{current_time}.pkl"
+    json_filename = f"bump_{embedding_model_name_for_saving}_{bump_detection_params_str}_{current_time}_details.json"
+
+    # Save bump detection results
+    bump_save_location = os.path.join(results_subfolder, bump_filename)
+    bump_df.to_pickle(bump_save_location)
+
+    # Save bump detection experiment details
+    bump_details = {
+        "bump_save_location": bump_save_location,
+        "bump_timestamp": current_time,
+        "time_taken_minutes": time_taken_minutes,
+    }
+
+    experiment_details = pipeline_json.copy()
+    
+    # Convert bump_detection_config to a JSON-serializable format
+    serializable_bump_detection_config = get_serializable_config(bump_detection_config)                                      
+    experiment_details.update({
+        "bump_detection_config": serializable_bump_detection_config,
+        "bump_detection_details": bump_details
+    })
+
+    json_save_location = os.path.join(details_subfolder, json_filename)
+    with open(json_save_location, 'w') as json_file:
+        json.dump(experiment_details, json_file, indent=4)
+
+    dataset_name_for_saving = pipeline_json["dataset_name"].replace("/", "-")
+    print(f"Bump detection results and experiment details saved successfully for {dataset_name_for_saving}.")
+    return bump_save_location, json_save_location
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Calculate the absolute difference in days between the two date columns
-detected_df['date_diff'] = (detected_df['closest_bump_peak_date'] - detected_df['date']).abs()
-
-# Filter the dataframe to keep only rows where the date difference is within 30 days
-filtered_df = detected_df[detected_df['date_diff'] <= pd.Timedelta(days=40)]
-
-# Drop the temporary 'date_diff' column if no longer needed
-filtered_df = filtered_df.drop(columns=['date_diff'])
+bump_configs = [
+    {
+        # If set to empty list will take all columns whose name ends with '_list' as timeline columns
+        'timeline_columns': [],  
+        'alpha_values': [0.02, 0.03, 0.04, 0.05],
+        'lower_threshold': 0.3,
+        'upper_threshold': 0.7,
+        'min_days_above_upper': 5,
+        'max_bump_width': 45
+    }
+]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-filtered_df.sort_values(["date","closest_bump_peak_date"]).tail(100)
+device = select_gpu_with_most_free_memory()
+
+for curr_json in filtered_jsons:
+    similarity_scores = load_experiment_objects(experiment_jsons = [curr_json],
+                            file_path_key = "similarity_save_location")[0]
+    
+    # Create df_wide from similarity_scores
+    print("Preparing wide format data of similarity scores")
+    df_wide = construct_df_wide(similarity_scores)
+    
+    print("Starting bump detection loop")
+    for bump_detection_config in bump_configs:
+        
+        timeline_columns = bump_detection_config.get('timeline_columns',[])
+        if len(timeline_columns) == 0:
+            timeline_columns = [col for col in df_wide.columns if col.endswith('_list')]
+            
+        alpha_values = bump_detection_config.get('alpha_values',[0.02, 0.03, 0.04, 0.05])
+        lower_threshold = bump_detection_config.get('lower_threshold',0.3)
+        upper_threshold = bump_detection_config.get('upper_threshold',0.7)
+        quantiles = (lower_threshold, upper_threshold)
+        min_days_above_upper = bump_detection_config.get('min_days_above_upper', 5)
+        max_bump_width = bump_detection_config.get('max_bump_width', 45)
+        
+        bump_df, time_taken = detect_bumps_in_df(df_wide, 
+                             timeline_columns = timeline_columns, 
+                             alpha_values = alpha_values, 
+                             quantiles = quantiles, 
+                             min_days_above_upper = min_days_above_upper, 
+                             max_bump_width = max_bump_width)
+        
+        print("Saving bump detection results")
+        save_bump_detection_results(
+            bump_df = bump_df,
+            bump_detection_folder_path = ed_bump_detection_folder_path,
+            pipeline_json = curr_json,
+            bump_detection_config = bump_detection_config,
+            time_taken_minutes = time_taken,
+        )
+    
+    
+# Clusters no longer needed - previously used to sanity check visualisations with top_terms    
+#     clusters_df = load_experiment_objects(experiment_jsons = [curr_json],
+#                             file_path_key = "clustering_save_location")[0]
+    
+#     # Ensure 'clusters_df' has the correct column order
+#     primary_columns = ['topic_id', 'date', 'cluster_size']
+#     secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
+#     clusters_df = clusters_df[primary_columns + secondary_columns]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ## EVERYTHING BELLOW THIS SHOULD BE MOVED TO THE ANALYSIS NOTEBOOKS
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Group by similarity_column and alpha and calculate the counts
-grouped_bump_df = bump_df.groupby(['similarity_column', 'alpha']).agg(
-    total_rows=pd.NamedAgg(column='has_bumps', aggfunc='size'),
-    bump_detected=pd.NamedAgg(column='has_bumps', aggfunc='sum')
-).reset_index()
+# grouped_bump_df = bump_df.groupby(['similarity_column', 'alpha']).agg(
+#     total_rows=pd.NamedAgg(column='has_bumps', aggfunc='size'),
+#     bump_detected=pd.NamedAgg(column='has_bumps', aggfunc='sum')
+# ).reset_index()
 
-# Calculate the detection rate
-grouped_bump_df['detection_rate'] = grouped_bump_df['bump_detected'] / grouped_bump_df['total_rows']
+# # Calculate the detection rate
+# grouped_bump_df['detection_rate'] = grouped_bump_df['bump_detected'] / grouped_bump_df['total_rows']
 
-# Display the results
-print(grouped_bump_df)
+# # Display the results
+# print(grouped_bump_df)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### FINDING DATES THAT ARE OFTEN MINIMUMS FOR SIMILARITY GRAPHS
@@ -366,143 +445,138 @@ print(grouped_bump_df)
 # # Display the sorted DataFrame
 # lowest_dates_df
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### VISUALISATIONS OF GRAPHS - SHOULD BE MOVED TO EVALUATION SECTION
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-df_wide.head(3)
+# from statsmodels.nonparametric.smoothers_lowess import lowess
+# import datetime
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-#clusters_df[clusters_df["date"]==datetime.date(2019,4,18)].ctfidf_representation.values
+# def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list", filter_date = datetime.date(2020, 2, 5)):    
+#     aLL_scores = np.array(np.concatenate(aggregated_df[sim_column]))
+#     q_lower = np.percentile(aLL_scores, 70) # higher makes it easier
+#     q_upper = np.percentile(aLL_scores, 40) # lower makes it easier
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-from statsmodels.nonparametric.smoothers_lowess import lowess
-import datetime
-import seaborn as sns
-import matplotlib.pyplot as plt
+#     # Extract the global start and end dates from the DataFrame
+#     global_start_date = aggregated_df['date'].min()
+#     global_end_date = aggregated_df['date'].max()
 
-def visualize_loess_smoothing(aggregated_df, N, alpha, sim_column = "max_sim_keybert_list", filter_date = datetime.date(2020, 2, 5)):    
-    aLL_scores = np.array(np.concatenate(aggregated_df[sim_column]))
-    q_lower = np.percentile(aLL_scores, 70) # higher makes it easier
-    q_upper = np.percentile(aLL_scores, 40) # lower makes it easier
-
-    # Extract the global start and end dates from the DataFrame
-    global_start_date = aggregated_df['date'].min()
-    global_end_date = aggregated_df['date'].max()
-
-    # Generate a timeline from the global start to end date
-    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+#     # Generate a timeline from the global start to end date
+#     timeline = pd.date_range(start=global_start_date, end=global_end_date)
     
-    # TESTING FILTER
-    aggregated_df = aggregated_df[aggregated_df["date"] == filter_date]
+#     # TESTING FILTER
+#     aggregated_df = aggregated_df[aggregated_df["date"] == filter_date]
     
-    # Sample N random clusters
-    sampled_clusters = aggregated_df.sample(n=N,replace=False)
+#     # Sample N random clusters
+#     sampled_clusters = aggregated_df.sample(n=N,replace=False)
 
-    # Plotting
-    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+#     # Plotting
+#     fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
 
-    if N == 1:
-        axs = [axs]  # Make sure axs is iterable for a single plot
+#     if N == 1:
+#         axs = [axs]  # Make sure axs is iterable for a single plot
 
-    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
-        # Convert Max_Similarities list to a Series with a proper datetime index
-        cluster_timeline = pd.Series(data=row[sim_column],
-                                     index=pd.date_range(start=global_start_date,
-                                                         end=global_end_date))
+#     for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+#         # Convert Max_Similarities list to a Series with a proper datetime index
+#         cluster_timeline = pd.Series(data=row[sim_column],
+#                                      index=pd.date_range(start=global_start_date,
+#                                                          end=global_end_date))
 
-        # Reindex to the global timeline, filling missing days with NaN, then interpolate
-        cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
+#         # Reindex to the global timeline, filling missing days with NaN, then interpolate
+#         cluster_timeline = cluster_timeline.reindex(timeline, method='pad')
 
-        # Apply LOESS smoothing
-        smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
+#         # Apply LOESS smoothing
+#         smoothed_values = lowess(cluster_timeline, np.arange(len(cluster_timeline)), frac=alpha)[:, 1]
 
-        # Plot original and smoothed values
-        ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
-        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
-        ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
-        ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
-        ax.vlines(x = filter_date, ymin =smoothed_values.min(), ymax = smoothed_values.max(), linewidth=1, color='green')
+#         # Plot original and smoothed values
+#         ax.plot(timeline, cluster_timeline, label='Original', alpha=0.4)
+#         ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+#         ax.hlines(y=q_lower, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+#         ax.hlines(y=q_upper, xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+#         ax.vlines(x = filter_date, ymin =smoothed_values.min(), ymax = smoothed_values.max(), linewidth=1, color='green')
 
-        ax.set_title(f'{row["date"]}-{row["ctfidf_representation"][:6]}')
-        ax.set_xlabel('Observation Date')
-        ax.set_ylabel('Max Similarity')
-        ax.legend()
+#         ax.set_title(f'{row["date"]}-{row["ctfidf_representation"][:6]}')
+#         ax.set_xlabel('Observation Date')
+#         ax.set_ylabel('Max Similarity')
+#         ax.legend()
 
-    plt.tight_layout()
-    plt.show()
+#     plt.tight_layout()
+#     plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# DIMENSION 10 
-sim_column = "max_sim_global_tfidf_representation_sentence_list"
-aLL_scores = np.array(np.concatenate(df_wide[sim_column]))
-q_lower = np.percentile(aLL_scores, 70)
-q_upper = np.percentile(aLL_scores, 30)
-print(q_lower,q_upper)
+# # DIMENSION 10 
+# df_wide = df_wide.merge(clusters_df, on=["topic_id","date"])
+# sim_column = "max_sim_global_tfidf_representation_sentence_list"
+# aLL_scores = np.array(np.concatenate(df_wide[sim_column]))
+# q_lower = np.percentile(aLL_scores, 70)
+# q_upper = np.percentile(aLL_scores, 30)
+# print(q_lower,q_upper)
 
-df_test = df_wide.copy()
-filter_date = datetime.date(2020, 2, 14)
-visualize_loess_smoothing(df_test, N=20, alpha=0.03, sim_column = sim_column, filter_date = filter_date)
+# df_test = df_wide.copy()
+# filter_date = datetime.date(2020, 2, 14)
+# visualize_loess_smoothing(df_test, N=20, alpha=0.03, sim_column = sim_column, filter_date = filter_date)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### VISUALISATIONS FOR THESIS
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Visualising the disritubtion of similarity scores
-import seaborn as sns
-import matplotlib.pyplot as plt
+# # Visualising the disritubtion of similarity scores
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
-def plot_global_distribution(data, column_name):
-    """
-    Plot the global distribution of a column's values.
-    :param data: DataFrame containing the data.
-    :param column_name: Name of the column to plot.
-    """
-    plt.figure(figsize=(10, 6))
-    sns.histplot(data[column_name], kde=True)
-    plt.title(f'Distribution of {column_name}')
-    plt.xlabel(column_name)
-    plt.ylabel('Frequency')
-    plt.show()
+# def plot_global_distribution(data, column_name):
+#     """
+#     Plot the global distribution of a column's values.
+#     :param data: DataFrame containing the data.
+#     :param column_name: Name of the column to plot.
+#     """
+#     plt.figure(figsize=(10, 6))
+#     sns.histplot(data[column_name], kde=True)
+#     plt.title(f'Distribution of {column_name}')
+#     plt.xlabel(column_name)
+#     plt.ylabel('Frequency')
+#     plt.show()
 
-# Example usage
-#sim_column = "max_sim_keybert_representation_average_list"
-#plot_global_distribution(similarity_scores, sim_column)
+# # Example usage
+# #sim_column = "max_sim_keybert_representation_average_list"
+# #plot_global_distribution(similarity_scores, sim_column)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Visualising the disritubtion of similarity scores if we perform Clipping with quantiles
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+# # Visualising the disritubtion of similarity scores if we perform Clipping with quantiles
+# import numpy as np
+# import pandas as pd
+# import matplotlib.pyplot as plt
 
-def enhanced_robust_scale_scores(scores):
-    """
-    Scale the scores robustly using quantiles for the lower bound and fix the upper bound to 1.
-    :param scores: A list or array of similarity scores.
-    :return: Scaled scores as a numpy array.
-    """
-    q1 = np.percentile(scores, 3)#1   # 1st percentile for lower bound
-    max_value = 1.0  # Fix the upper bound to 1
+# def enhanced_robust_scale_scores(scores):
+#     """
+#     Scale the scores robustly using quantiles for the lower bound and fix the upper bound to 1.
+#     :param scores: A list or array of similarity scores.
+#     :return: Scaled scores as a numpy array.
+#     """
+#     q1 = np.percentile(scores, 3)#1   # 1st percentile for lower bound
+#     max_value = 1.0  # Fix the upper bound to 1
 
-    # Clip scores to quantile range for lower bound only
-    scores_clipped = np.clip(scores, q1, max_value)
+#     # Clip scores to quantile range for lower bound only
+#     scores_clipped = np.clip(scores, q1, max_value)
     
-    # Scale scores to 0-1 range
-    scaled_scores = (scores_clipped - q1) / (max_value - q1)
+#     # Scale scores to 0-1 range
+#     scaled_scores = (scores_clipped - q1) / (max_value - q1)
     
-    return scaled_scores
+#     return scaled_scores
 
-# Example usage
-scores = np.array(similarity_scores["max_sim_keybert_representation_average"])  # Example similarity scores
-#scaled_scores = enhanced_robust_scale_scores(scores)
+# # Example usage
+# scores = np.array(similarity_scores["max_sim_keybert_representation_average"])  # Example similarity scores
+# #scaled_scores = enhanced_robust_scale_scores(scores)
 
-# Plotting the scaled scores to visualize the distribution
-# plt.figure(figsize=(10, 6))
-# sns.histplot(scaled_scores, kde=True)
-# plt.title('Distribution of Scaled Similarity Scores')
-# plt.xlabel('Scaled Similarity Score')
-# plt.ylabel('Frequency')
-# plt.show()
+# # Plotting the scaled scores to visualize the distribution
+# # plt.figure(figsize=(10, 6))
+# # sns.histplot(scaled_scores, kde=True)
+# # plt.title('Distribution of Scaled Similarity Scores')
+# # plt.xlabel('Scaled Similarity Score')
+# # plt.ylabel('Frequency')
+# # plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### OLD CODE
