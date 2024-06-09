@@ -6,6 +6,7 @@ from dataiku import pandasutils as pdu
 import ast
 import json
 import time
+import openai
 from tqdm import tqdm
 from openai_utils import (
     handle_rate_limit_error,
@@ -16,16 +17,26 @@ from openai_utils import (
 weekly_event_extraction = dataiku.Dataset("weekly_event_extraction")
 event_df = weekly_event_extraction.get_dataframe()
 
-# Output of recipe 
+# Output of recipe
 events_merged_dataset = dataiku.Dataset("weekly_events_merged")
 
 # Fixing lists
 event_df['representative_docs'] = event_df['representative_docs'].apply(ast.literal_eval)
 event_df['ctfidf_representation'] = event_df['ctfidf_representation'].apply(ast.literal_eval)
 event_df['keybert_representation'] = event_df['keybert_representation'].apply(ast.literal_eval)
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import openai
+event_df['tweet_ids'] = event_df['tweet_ids'].apply(ast.literal_eval)
 
+# Fixing date columns to get rid of hours, mins, seconds
+event_df['start_date'] = pd.to_datetime(event_df['start_date']).dt.date
+event_df['end_date'] = pd.to_datetime(event_df['end_date']).dt.date
+
+# Keeping only the events to determine which are redundant
+event_df = event_df[event_df["is_event"] == True]
+
+# Adding cluster size for picking representative cluster if redundant
+event_df['cluster_size'] = event_df['tweet_ids'].apply(len)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 openai.api_key = "a796cd0d45604c42b9738d7900c11861"
 openai.api_base = "https://topic-representation-long.openai.azure.com/"
 openai.api_type = "azure"
@@ -37,9 +48,7 @@ openai_config = {
             "temperature": 0.2 ,
             "top_p": 0.2
             }
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-event_df = event_df[event_df["is_event"] == True]
-event_df.head(5)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 system_message = {
     "role": "system",
@@ -57,7 +66,7 @@ def create_weekly_prompt(week_events):
             "event_description": row['event_description']
         }
         events_details.append(event_detail)
-        
+
     prompt = f"""
     I am providing you with a list of events detected for a specific week. These events were extracted by clustering\
     tweets written by German politicians and then prompting GPT to determine which of the topics obtained through the \
@@ -88,7 +97,11 @@ def create_weekly_prompt(week_events):
         ]
     }}
     """
-# Old prompt for merging redundant event topics    
+    
+    return prompt
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Old prompt for merging redundant event topics
 #     prompt = f"""
 #     I am providing you with a list of events detected for a specific week. These events were extracted \
 #     by clustering tweets written by German politicians and then prompting GPT to determine which of the topics obtained \
@@ -113,7 +126,7 @@ def create_weekly_prompt(week_events):
 #         ]
 #     }}
 #     """
-    return prompt
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def get_request_with_backoff(messages, deployment_name, openai_config, max_attempts=3):
     for attempt in range(max_attempts):
@@ -155,8 +168,10 @@ def get_request_with_backoff(messages, deployment_name, openai_config, max_attem
             else:
                 time.sleep(5)  # Wait for 5 seconds before retrying
     return {"merged_topics": []}
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 from datetime import timedelta
+import random
 # Function to process weekly events
 def process_weekly_events(week_events):
     current_prompt = create_weekly_prompt(week_events)
@@ -164,9 +179,13 @@ def process_weekly_events(week_events):
     result = get_request_with_backoff(messages, deployment_name, openai_config)
     return result
 
+# Sort the rows using the week and topic_id
+event_df.sort_values(by = ["start_date","topic_id"])
+
 # Initialize new columns in event_df
 event_df['is_redundant'] = False
 event_df['captured_by'] = None
+event_df['all_ids'] = None
 
 # Process each week
 weekly_results = []
@@ -175,38 +194,52 @@ weekly_results = []
 event_df_grouped = event_df.groupby(['start_date', 'end_date'])
 
 for (start_date, end_date), week_events in tqdm(event_df_grouped, desc="Processing weeks"):
-    if not week_events.empty:        
+    if not week_events.empty:
         # Send prompt to GPT and get the response
         response = process_weekly_events(week_events)
-        
-                # Extract merged_topics from the response
+        # Extract merged_topics from the response
         merged_topics = response.get("merged_topics", [])
-        
+
         for topic in merged_topics:
-            main_id = topic["topic_id"]
             redundant_ids = topic.get("redundant_ids", [])
+            if not redundant_ids:
+                continue
             
-            # Update the is_redundant and captured_by columns in the original DataFrame
-            for redundant_id in redundant_ids:
-                event_df.loc[(event_df['topic_id'] == redundant_id) & (event_df['start_date'] == start_date), 'is_redundant'] = True
-                event_df.loc[(event_df['topic_id'] == redundant_id) & (event_df['start_date'] == start_date), 'captured_by'] = main_id
+            all_ids = [topic["topic_id"]] + redundant_ids
+            
+            # Determine the main_id by finding the largest cluster
+            sizes = {topic_id: event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'cluster_size'].iloc[0]
+                     for topic_id in all_ids}
+            main_id = max(sizes, key=sizes.get)
+            
+            # Combine tweet_ids of all clusters
+            combined_tweet_ids = []
+            for topic_id in all_ids:
+                combined_tweet_ids.extend(event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'tweet_ids'].iloc[0])
 
-            # Ensure the representative topic is not marked as redundant
-            event_df.loc[(event_df['topic_id'] == main_id) & (event_df['start_date'] == start_date), 'is_redundant'] = False
-            event_df.loc[(event_df['topic_id'] == main_id) & (event_df['start_date'] == start_date), 'captured_by'] = None
-
+            # Update the is_redundant, captured_by, and all_ids columns in the original DataFrame
+            combined_tweet_ids_str = str(combined_tweet_ids)
+            for topic_id in all_ids:
+                if topic_id == main_id:
+                    event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'all_ids'] = combined_tweet_ids_str
+                else:
+                    event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'is_redundant'] = True
+                    event_df.loc[(event_df['topic_id'] == topic_id) & (event_df['start_date'] == start_date), 'captured_by'] = main_id
         # Save response for debugging or further analysis
         weekly_results.append({
             "start_date": start_date,
             "end_date": end_date,
             "response": response
         })
-        print(start_date, response)
-        
+        print("Processed week starting in: ", start_date)
+        print("Response was:", response)
+
 # Process and save the results
 responses_df = pd.DataFrame(weekly_results)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 #responses_df[["start_date","response"]].values
 #event_df[event_df["is_redundant"]]
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 events_merged_dataset.write_with_schema(event_df)
