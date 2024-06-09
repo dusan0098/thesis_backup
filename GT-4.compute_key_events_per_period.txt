@@ -26,6 +26,7 @@ key_events_dataset = dataiku.Dataset("key_events_per_period")
 candidates_df['representative_docs'] = candidates_df['representative_docs'].apply(ast.literal_eval)
 candidates_df['ctfidf_representation'] = candidates_df['ctfidf_representation'].apply(ast.literal_eval)
 candidates_df['keybert_representation'] = candidates_df['keybert_representation'].apply(ast.literal_eval)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 openai.api_key = "a796cd0d45604c42b9738d7900c11861"
 openai.api_base = "https://topic-representation-long.openai.azure.com/"
@@ -38,6 +39,7 @@ openai_config = {
             "temperature": 0.2 ,
             "top_p": 0.2
             }
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 system_message = {
     "role": "system",
@@ -59,7 +61,7 @@ def create_importance_prompt(week_events):
             "event_description": row['event_description'],
         }
         events_details.append(event_detail)
-    
+
     prompt = f"""
     I am providing you with a list of events detected for a specific week. These events were extracted \
     by clustering tweets written by German politicians and then prompting GPT to determine which of the topics obtained \
@@ -72,7 +74,7 @@ def create_importance_prompt(week_events):
     Here are the details of the events:
 
     {events_details}
-    
+
     Important: Ensure that the response is in valid JSON format and avoid using characters such as newlines, \
     tabs, unescaped double quotes, and backslashes that may break the JSON structure.
 
@@ -84,6 +86,7 @@ def create_importance_prompt(week_events):
     }}
     """
     return prompt
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import re
 import copy
@@ -103,7 +106,7 @@ def handle_json_format_error_with_preprocessing(current_messages, deployment_nam
         # Preprocess the JSON string to handle special characters
         content = response['choices'][0]['message']['content']
         preprocessed_content = preprocess_json_string(content)
-        
+
         # Try loading the preprocessed JSON
         result = json.loads(preprocessed_content)
         return result
@@ -157,11 +160,14 @@ def get_request_with_backoff(messages, deployment_name, openai_config, max_attem
     return {"key_event_id": None, "detailed_event_description": ""}
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import json 
+import json
 import time
 
 # Function to process weekly events
-def process_weekly_events_for_importance(week_events):
+def process_weekly_events_for_importance(week_events, top_n = 10):
+    week_events.sort_values(by="cluster_size", ascending= False)
+    week_events = week_events.head(top_n)
+    
     current_prompt = create_importance_prompt(week_events)
     messages = [system_message, {"role": "user", "content": current_prompt}]
     result = get_request_with_backoff(messages, deployment_name, openai_config)
@@ -173,18 +179,21 @@ importance_results = []
 # Group non-redundant events by start_date and end_date
 candidates_grouped = candidates_df.groupby(['start_date', 'end_date'])
 
+top_n = 5
+
 for (start_date, end_date), week_events in tqdm(candidates_grouped, desc="Processing weeks for importance"):
     if not week_events.empty:
         # Create prompt for the current week
-        response = process_weekly_events_for_importance(week_events)
-        
+        response = process_weekly_events_for_importance(week_events, 
+                                                        top_n = top_n)
+
         if response is None:
             print(f"Prompting broke for period (response is None):{start_date} to {end_date}. No row saved")
             continue
-            
+
         # Extract most important event details from the response
         key_event_id = response.get("key_event_id", None)
-        
+
         # Handle broken request
         if key_event_id is None:
             print(f"Prompting broke for period:{start_date} to {end_date}. No row saved")
@@ -208,5 +217,6 @@ for (start_date, end_date), week_events in tqdm(candidates_grouped, desc="Proces
 
 # Create a DataFrame from the importance results
 key_events_df = pd.DataFrame(importance_results)
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 key_events_dataset.write_with_schema(key_events_df)
