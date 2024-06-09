@@ -68,13 +68,22 @@ def create_weekly_prompt(week_events):
         events_details.append(event_detail)
 
     prompt = f"""
-    I am providing you with a list of events detected for a specific week. These events were extracted by clustering\
+    I am providing you with a list of events detected for a specific week. These events were extracted by clustering \
     tweets written by German politicians and then prompting GPT to determine which of the topics obtained through the \
-    clustering correspond to events and extracting details about each event.
-    Each event includes a topic_id, estimated date (event_date), title (event_name), and a short description (event_description).
+    clustering correspond to events and extracting details about each event. Each event includes a topic_id, estimated \
+    date (event_date), title (event_name), and a short description (event_description).
 
-    Please analyze the list and identify which events are redundant or refer to the same topic. For each redundant event,\
-    specify the ID of the topic that best captures the event.
+    Please analyze the list and identify which events are redundant or refer to the same topic. For each redundant event, \
+    specify the ID of the topic that best captures the event. Events are redundant if they talk about the same happening, \
+    discussion, manifestation, etc. For example, two discussions about completely different subjects in the parliament are \
+    not redundant, but two discussions about the same law or issue are. Two events talking about terrorist attacks are \
+    redundant if they refer to the same terrorist attack. 
+
+    Examples:
+    - If two topics discuss different aspects of the same protest happening on the same day, they are redundant.
+    - If two topics refer to different protests happening in different cities, they are not redundant.
+    - If two topics discuss different speeches given by the same politician on the same day about the same subject, they are redundant.
+    - If two topics refer to speeches given by different politicians about different subjects, they are not redundant.
 
     Here are the details of the events:
     {events_details}
@@ -82,8 +91,7 @@ def create_weekly_prompt(week_events):
     Important instructions:
     - Only use the IDs provided in the list.
     - If a topic is considered the most representative, it cannot be marked as redundant to another topic.
-    - Ensure that no `redundant_ids` lists overlap. Each redundant topic should be assigned to only one representative\
-    topic.
+    - Ensure that no `redundant_ids` lists overlap. Each redundant topic should be assigned to only one representative topic.
 
     Based on this information, please provide your response in the following JSON format:
 
@@ -97,6 +105,40 @@ def create_weekly_prompt(week_events):
         ]
     }}
     """
+
+#     prompt = f"""
+#     I am providing you with a list of events detected for a specific week. These events were extracted by clustering\
+#     tweets written by German politicians and then prompting GPT to determine which of the topics obtained through the \
+#     clustering correspond to events and extracting details about each event.
+#     Each event includes a topic_id, estimated date (event_date), title (event_name), and a short description (event_description).
+
+#     Please analyze the list and identify which events are redundant or refer to the same topic. For each redundant event,\
+#     specify the ID of the topic that best captures the event. Events are redundant if they talk about the same happening,\
+#     discussion, manifestation etc. For example, two discussions about completely different subjects in the parliament are \
+#     not redundant, but two discussions about the same law/issue are. Two events talking about terrorist attacks are redundant\
+#     if they talk about the same terrorist attack. 
+
+#     Here are the details of the events:
+#     {events_details}
+
+#     Important instructions:
+#     - Only use the IDs provided in the list.
+#     - If a topic is considered the most representative, it cannot be marked as redundant to another topic.
+#     - Ensure that no `redundant_ids` lists overlap. Each redundant topic should be assigned to only one representative\
+#     topic.
+
+#     Based on this information, please provide your response in the following JSON format:
+
+#     {{
+#         "merged_topics": [
+#             {{
+#                 "topic_id": int,  # The ID of the most representative topic
+#                 "redundant_ids": [int, int, ...]  # List of IDs of topics that talk about the same event as topic_id
+#             }},
+#             ...
+#         ]
+#     }}
+#     """
     
     return prompt
 
