@@ -409,11 +409,12 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, global_vectoriz
         # Extracting main info that we need
         topic_info = topic_model.get_topic_info()
         topic_info = topic_info[topic_info['Topic'] != -1]  # Ignore outliers
-        topic_info = topic_info[['Topic', 'Count','Representation','keybert']]
+        topic_info = topic_info[['Topic', 'Count','Representative_Docs','Representation','keybert']]
 
         topic_info.rename(columns={
             'Topic': 'topic_id',
             'Count': 'cluster_size',
+            'Representative_Docs': 'repr_docs',
             'Representation': 'ctfidf_representation',
             'keybert': 'keybert_representation',
         }, inplace=True)

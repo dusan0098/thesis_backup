@@ -133,10 +133,18 @@ def calculate_max_similarities(clusters_df, cluster_embeddings, n_components=2, 
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 similarity_configs = [
+#     {
+#     "reduce": True,
+#     "target_dimension": 2,
+#     ### POSSIBLE CANDIDATES - nr_terms (up to 10), with_weights - True/False, model - if we want to predefine the model
+#     },
+#     {
+#     "reduce": True,
+#     "target_dimension": 5,
+#     },
     {
     "reduce": True,
-    "target_dimension": 2,
-    ### POSSIBLE CANDIDATES - nr_terms (up to 10), with_weights - True/False, model - if we want to predefine the model
+    "target_dimension": 10,
     },
 ]
 
