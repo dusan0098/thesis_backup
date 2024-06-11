@@ -98,85 +98,165 @@ def construct_df_wide(similarity_scores):
 # ### BUMP DETECTION FUNCTION
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-def detect_bumps_in_series(lower_threshold, upper_threshold, timeline, smoothed_values, min_days_above_upper=7, max_bump_width=45):
+# Step 1: Label each point as rise or fall
+def label_rise_fall(smoothed_values):
+    labels = ["-"]
+    for i in range(1, len(smoothed_values)):
+        if smoothed_values[i] > smoothed_values[i - 1]:
+            labels.append("R")
+        elif smoothed_values[i] < smoothed_values[i - 1]:
+            labels.append("F")
+        else:
+            labels.append(labels[-1])  # In case of equal values, keep the previous state
+    return labels
+
+# Step 2: Identify bumps
+def identify_bumps(labels, smoothed_values, timeline):
     bumps = []
-    in_bump = False
-    bump_start_date = None
-    bump_peak_date = None
-    bump_peak_value = float('-inf')  # Ensure this is always a float
-    first_above_upper_date = None
-    bump_end_date = None
-    current_trend = 'waiting'
-    days_above_upper = 0
+    in_rise = False
+    bump_start = None
+    bump_peak = None
+    bump_end = None
 
-    previous_value = None
-    previous_date = None
+    for i in range(1, len(labels)):
+        if labels[i] == "R" and not in_rise:
+            in_rise = True
+            bump_start = i - 1
+        elif labels[i] == "F" and in_rise:
+            bump_peak = i - 1
+            in_rise = False
 
-    for date, value in zip(timeline, smoothed_values):
-        date = date.date()  # Ensure the date is of type datetime.date
+            # Check for the end of the bump
+            if bump_start is not None and bump_peak is not None:
+                j = i
+                while j < len(labels) and labels[j] == "F":
+                    j += 1
+                bump_end = j - 1
 
-        if current_trend == 'waiting':
-            if value < lower_threshold:
-                bump_start_date = date
-                current_trend = 'rising'
+                # Record the bump
+                bumps.append({
+                    'start_date': timeline[bump_start].date(),
+                    'end_date': timeline[bump_end].date(),
+                    'peak_date': timeline[bump_peak].date(),
+                    'peak_value': smoothed_values[bump_peak],
+                    'start_index': bump_start,
+                    'peak_index': bump_peak,
+                    'end_index': bump_end
+                })
 
-        elif current_trend == 'rising':
-            if previous_value is not None and value < previous_value:
-                if bump_peak_value > upper_threshold:
-                    current_trend = 'falling'
-                else:
-                    # Reset if we start falling before reaching the upper threshold
-                    current_trend = 'waiting'
-                    bump_start_date = None
-                    bump_peak_date = None
-                    bump_peak_value = float('-inf')  # Reset to negative infinity
-                    first_above_upper_date = None
-                    bump_end_date = None
-                    days_above_upper = 0
-            else:
-                if value > upper_threshold:
-                    if first_above_upper_date is None:
-                        first_above_upper_date = date
-                    days_above_upper += 1
-                if bump_peak_value is None or value > bump_peak_value:
-                    bump_peak_value = value
-                    bump_peak_date = date
-
-        elif current_trend == 'falling':
-            if previous_value is not None and value > previous_value:
-                # Reset if we start rising again during falling
-                current_trend = 'waiting'
-                bump_start_date = None
-                bump_peak_date = None
-                bump_peak_value = float('-inf')  # Reset to negative infinity
-                first_above_upper_date = None
-                bump_end_date = None
-                days_above_upper = 0
-            else:
-                if value < lower_threshold:
-                    bump_end_date = date
-                    if first_above_upper_date and days_above_upper >= min_days_above_upper and (bump_end_date - bump_start_date).days <= max_bump_width:
-                        bumps.append({
-                            'start_date': bump_start_date,
-                            'first_above_upper_date': first_above_upper_date,
-                            'peak_date': bump_peak_date,
-                            'peak_value': bump_peak_value,
-                            'end_date': bump_end_date,
-                            'days_above_upper': days_above_upper,
-                        })
-                    # Reset all variables for the next potential bump
-                    current_trend = 'waiting'
-                    bump_start_date = None
-                    bump_peak_date = None
-                    bump_peak_value = float('-inf')  # Reset to negative infinity
-                    first_above_upper_date = None
-                    bump_end_date = None
-                    days_above_upper = 0
-
-        previous_value = value
-        previous_date = date
+                bump_start = None
+                bump_peak = None
+                bump_end = None
 
     return bumps
+
+def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_threshold, min_days_above_upper=7, max_bump_width=45):
+    # Execute the steps
+    labels = label_rise_fall(smoothed_values)
+    bumps = identify_bumps(labels, smoothed_values, timeline)
+    
+    filtered_bumps = []
+    for bump in bumps:
+        # Check if start and end are below lower threshold
+        if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
+            # Check if peak is above upper threshold
+            if bump['peak_value'] > upper_threshold:
+                # Check width of the bump
+                bump_width = (bump['end_date'] - bump['start_date']).days
+                if bump_width <= max_bump_width:
+                    # Check number of days above upper threshold
+                    days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
+                    if days_above_upper >= min_days_above_upper:
+                        bump['days_above_upper'] = days_above_upper
+                        # Find the first date above upper threshold
+                        bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
+                        filtered_bumps.append(bump)
+    return filtered_bumps
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# OLD BUMP DETECTION FUNCTION - MISSES EDGE CASES AND COUNTS DAYS INCORRECTLY
+# def detect_bumps_in_series(lower_threshold, upper_threshold, timeline, smoothed_values, min_days_above_upper=7, max_bump_width=45):
+#     bumps = []
+#     in_bump = False
+#     bump_start_date = None
+#     bump_peak_date = None
+#     bump_peak_value = float('-inf')  # Ensure this is always a float
+#     first_above_upper_date = None
+#     bump_end_date = None
+#     current_trend = 'waiting'
+#     days_above_upper = 0
+
+#     previous_value = None
+#     previous_date = None
+
+#     for date, value in zip(timeline, smoothed_values):
+#         date = date.date()  # Ensure the date is of type datetime.date
+
+#         if current_trend == 'waiting':
+#             if value < lower_threshold:
+#                 bump_start_date = date
+#                 current_trend = 'rising'
+
+#         elif current_trend == 'rising':
+#             if previous_value is not None and value < previous_value:
+#                 if bump_peak_value > upper_threshold:
+#                     current_trend = 'falling'
+#                 else:
+#                     # Reset if we start falling before reaching the upper threshold
+#                     current_trend = 'waiting'
+#                     bump_start_date = None
+#                     bump_peak_date = None
+#                     bump_peak_value = float('-inf')  # Reset to negative infinity
+#                     first_above_upper_date = None
+#                     bump_end_date = None
+#                     days_above_upper = 0
+#             else:
+#                 if value > upper_threshold:
+#                     if first_above_upper_date is None:
+#                         first_above_upper_date = date
+#                     days_above_upper += 1
+#                 if bump_peak_value is None or value > bump_peak_value:
+#                     bump_peak_value = value
+#                     bump_peak_date = date
+
+#         elif current_trend == 'falling':
+#             if previous_value is not None and value > previous_value:
+#                 # Reset if we start rising again during falling
+#                 current_trend = 'waiting'
+#                 bump_start_date = None
+#                 bump_peak_date = None
+#                 bump_peak_value = float('-inf')  # Reset to negative infinity
+#                 first_above_upper_date = None
+#                 bump_end_date = None
+#                 days_above_upper = 0
+#             else:
+#                 if value < lower_threshold:
+#                     bump_end_date = date
+#                     if first_above_upper_date and days_above_upper >= min_days_above_upper and (bump_end_date - bump_start_date).days <= max_bump_width:
+#                         bumps.append({
+#                             'start_date': bump_start_date,
+#                             'first_above_upper_date': first_above_upper_date,
+#                             'peak_date': bump_peak_date,
+#                             'peak_value': bump_peak_value,
+#                             'end_date': bump_end_date,
+#                             'days_above_upper': days_above_upper,
+#                         })
+#                     # Reset all variables for the next potential bump
+#                     current_trend = 'waiting'
+#                     bump_start_date = None
+#                     bump_peak_date = None
+#                     bump_peak_value = float('-inf')  # Reset to negative infinity
+#                     first_above_upper_date = None
+#                     bump_end_date = None
+#                     days_above_upper = 0
+
+#         previous_value = value
+#         previous_date = date
+
+#     return bumps
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### BUMP DETECTION LOOP
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def loess_smoothing_single(df, col, alpha):
@@ -210,9 +290,13 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
             lower_threshold, upper_threshold = calculate_quantiles_from_smoothed(smoothed_values, quantiles)
 
             for idx, row in df_wide.iterrows():
-                smoothed_row_values = smoothed_values[idx]
-                bumps = detect_bumps_in_series(lower_threshold, upper_threshold, timeline, \
-                                               smoothed_row_values, min_days_above_upper, max_bump_width)
+                smoothed_row_values = smoothed_values[idx].tolist()
+                bumps = detect_bumps_in_series(smoothed_values = smoothed_row_values, 
+                                               timeline = timeline,
+                                               lower_threshold = lower_threshold,
+                                               upper_threshold =upper_threshold,
+                                               min_days_above_upper =min_days_above_upper,
+                                               max_bump_width = max_bump_width)
                 has_bumps = len(bumps) > 0
                 closest_bump_peak_date = None
                 closest_bump_peak_value = None
@@ -238,6 +322,7 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                     'date': row['date'],
                     'similarity_column': col,
                     'alpha': alpha,
+                    'smoothed_values': smoothed_row_values,
                     'has_bumps': has_bumps,
                     'total_bumps': total_bumps,
                     'closest_bump_peak_date': closest_bump_peak_date,
@@ -320,7 +405,7 @@ def save_bump_detection_results(bump_df, bump_detection_folder_path, pipeline_js
 bump_configs = [
     {
         # If set to empty list will take all columns whose name ends with '_list' as timeline columns
-        'timeline_columns': [],  
+        'timeline_columns': [],#["max_sim_global_tfidf_representation_weighted_list"], 
         'alpha_values': [0.02, 0.03, 0.04, 0.05],
         'lower_threshold': 0.3,
         'upper_threshold': 0.7,
@@ -379,6 +464,72 @@ for curr_json in filtered_jsons:
 #     primary_columns = ['topic_id', 'date', 'cluster_size']
 #     secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
 #     clusters_df = clusters_df[primary_columns + secondary_columns]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# bump_df.has_bumps.sum()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# clusters_df = load_experiment_objects(experiment_jsons = [curr_json],
+#                         file_path_key = "clustering_save_location")[0]
+
+# # Ensure 'clusters_df' has the correct column order
+# primary_columns = ['topic_id', 'date', 'cluster_size']
+# secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
+# clusters_df = clusters_df[primary_columns + secondary_columns]
+# clusters_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# bump_df = bump_df.merge(clusters_df, on=["topic_id","date"])
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import matplotlib.pyplot as plt
+# import pandas as pd
+# import numpy as np
+# import random
+# import datetime
+
+# def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,1)):
+#     # Extract the global start and end dates from the DataFrame
+#     global_start_date = bump_df['date'].min()
+#     global_end_date = bump_df['date'].max()
+
+#     # Generate a timeline from the global start to end date
+#     timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+#     # Filter the DataFrame by the specified date
+#     filtered_df = bump_df[bump_df['date'] >= filter_date]
+#     filtered_df = filtered_df[filtered_df["has_bumps"]]
+    
+#     # Sample N random clusters
+#     sampled_clusters = filtered_df.sample(n=N, replace=False)
+
+#     # Plotting
+#     fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+
+#     if N == 1:
+#         axs = [axs]  # Make sure axs is iterable for a single plot
+
+#     for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+#         # Extract smoothed values from the DataFrame
+#         smoothed_values = row['smoothed_values']
+
+#         # Plot original and smoothed values
+#         ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+
+#         # Highlight the closest bump peak date
+#         if row['closest_bump_peak_date']:
+#             ax.axvline(x=row['closest_bump_peak_date'], color='green', linestyle='--', label='Closest Bump Peak')
+
+#         ax.set_title(f"Topic ID: {row['topic_id']} - Date: {row['date']} - {row['global_tfidf_representation']}")
+#         ax.set_xlabel('Timeline Date')
+#         ax.set_ylabel('Smoothed Value')
+#         ax.legend()
+
+#     plt.tight_layout()
+#     plt.show()
+
+# # Example usage
+# visualize_bumps(bump_df, N=5, sim_column = "max_sim_global_tfidf_representation_sentence_list", filter_date =  datetime.date(2020,2,5))
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ## EVERYTHING BELLOW THIS SHOULD BE MOVED TO THE ANALYSIS NOTEBOOKS
