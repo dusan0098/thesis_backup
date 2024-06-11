@@ -57,8 +57,11 @@ for curr_json in filtered_jsons:
                             file_path_key = "bump_save_location")[0]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-max_delta_days = 15
-bump_df = bump_df[(bump_df["has_bumps"]) & (bump_df["total_bumps"]==1)]
+bump_df.total_bumps.value_counts()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+max_delta_days = 20
+bump_df = bump_df[(bump_df["has_bumps"]) & (bump_df["total_bumps"]<=2)]
 filtered_bump_df = bump_df[
     bump_df.apply(lambda row: abs((row['closest_bump_peak_date'] - row['date']).days) <= max_delta_days, axis=1)
 ]
@@ -78,7 +81,7 @@ import numpy as np
 import random
 import datetime
 
-def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,1)):
+def visualize_bumps(bump_df, N, sim_column, alpha = 0.03, filter_date =  datetime.date(2019,1,1)):
     # Extract the global start and end dates from the DataFrame
     global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
     global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
@@ -87,7 +90,7 @@ def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,
     timeline = pd.date_range(start=global_start_date, end=global_end_date)
     
     #
-    filtered_df = bump_df[bump_df["similarity_column"] == sim_column]
+    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column) &(bump_df["alpha"] == alpha)]
     
     # Sample N random clusters
     sampled_clusters = filtered_df.sample(n=N, replace=False)
@@ -108,6 +111,10 @@ def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,
         # Highlight the closest bump peak date
         if row['closest_bump_peak_date']:
             ax.axvline(x=row['closest_bump_peak_date'], color='green', linestyle='--', label='Closest Bump Peak')
+        
+        ax.axvline(x=row['date'], color='orange', linestyle='--', label='Date of topic')
+        ax.hlines(y=row["lower_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+        ax.hlines(y=row["upper_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
 
         ax.set_title(f"Topic ID: {row['topic_id']} - Date: {row['date']} - {row['global_tfidf_representation']}")
         ax.set_xlabel('Timeline Date')
@@ -118,4 +125,6 @@ def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,
     plt.show()
 
 # Example usage
-visualize_bumps(filtered_bump_df, N=5, sim_column = "max_sim_global_tfidf_representation_weighted_list", filter_date =  datetime.date(2020,2,5))
+visualize_bumps(filtered_bump_df, N=5, sim_column = "max_sim_BERTopic_embedding_list", 
+                alpha = 0.04,
+                filter_date =  datetime.date(2020,2,5))
