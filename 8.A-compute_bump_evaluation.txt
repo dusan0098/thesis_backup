@@ -1,0 +1,121 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+from utils import (
+    select_gpu_with_most_free_memory,
+    load_experiment_jsons,
+    load_experiment_objects,
+    get_current_time_and_unix_timestamp,
+    get_newest_json,
+    get_unique_dictionaries,
+    save_combination_list,
+)
+
+# Input folders
+ed_clusters_with_reps = dataiku.Folder("oiEvOl5p")
+ed_clusters_with_reps_path = ed_clusters_with_reps.get_path()
+
+ed_similarity_scores = dataiku.Folder("0JFzvl2d")
+ed_similarity_scores_path= ed_similarity_scores.get_path()
+
+ed_similarity_scores_processed = dataiku.Folder("hZfSC2LV")
+ed_similarity_scores_processed_path = ed_similarity_scores_processed.get_path()
+
+# Input dataset
+key_events_per_period = dataiku.Dataset("key_events_per_period")
+key_events_per_period_df = key_events_per_period.get_dataframe()
+
+# Output folder
+bump_evaluation = dataiku.Folder("bFPFsUEv")
+bump_evaluation_path = bump_evaluation.get_path()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+experiment_jsons = load_experiment_jsons(
+                            root_folder_path = ed_similarity_scores_processed_path,
+                            dataset_name = "",
+                            experiment_details_subfolder = "bump_detection_experiment_details")
+# Add filter if necessary
+filtered_jsons = experiment_jsons
+filtered_jsons
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+for curr_json in filtered_jsons:
+    clusters_df  = load_experiment_objects(experiment_jsons = [curr_json],
+                            file_path_key = "clustering_save_location")[0]
+    
+    # Ensure 'clusters_df' has the correct column order
+    primary_columns = ['topic_id', 'date', 'cluster_size']
+    secondary_columns = [col for col in clusters_df.columns if col not in primary_columns]
+    clusters_df = clusters_df[primary_columns + secondary_columns]
+    
+#     similarity_scores = load_experiment_objects(experiment_jsons = [curr_json],
+#                             file_path_key = "similarity_save_location")[0]
+    
+    bump_df  = load_experiment_objects(experiment_jsons = [curr_json],
+                            file_path_key = "bump_save_location")[0]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+max_delta_days = 15
+bump_df = bump_df[(bump_df["has_bumps"]) & (bump_df["total_bumps"]==1)]
+filtered_bump_df = bump_df[
+    bump_df.apply(lambda row: abs((row['closest_bump_peak_date'] - row['date']).days) <= max_delta_days, axis=1)
+]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+counts = filtered_bump_df.groupby(['similarity_column', 'alpha']).size().reset_index(name='count')
+print(counts)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+filtered_bump_df = filtered_bump_df.merge(clusters_df, on=["topic_id","date"])
+filtered_bump_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import random
+import datetime
+
+def visualize_bumps(bump_df, N, sim_column, filter_date =  datetime.date(2019,1,1)):
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
+    global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
+
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    #
+    filtered_df = bump_df[bump_df["similarity_column"] == sim_column]
+    
+    # Sample N random clusters
+    sampled_clusters = filtered_df.sample(n=N, replace=False)
+
+    # Plotting
+    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+
+    if N == 1:
+        axs = [axs]  # Make sure axs is iterable for a single plot
+
+    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+        # Extract smoothed values from the DataFrame
+        smoothed_values = row['smoothed_values']
+
+        # Plot original and smoothed values
+        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+
+        # Highlight the closest bump peak date
+        if row['closest_bump_peak_date']:
+            ax.axvline(x=row['closest_bump_peak_date'], color='green', linestyle='--', label='Closest Bump Peak')
+
+        ax.set_title(f"Topic ID: {row['topic_id']} - Date: {row['date']} - {row['global_tfidf_representation']}")
+        ax.set_xlabel('Timeline Date')
+        ax.set_ylabel('Smoothed Value')
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Example usage
+visualize_bumps(filtered_bump_df, N=5, sim_column = "max_sim_global_tfidf_representation_weighted_list", filter_date =  datetime.date(2020,2,5))

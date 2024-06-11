@@ -161,8 +161,11 @@ def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_thr
         if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
             # Check if peak is above upper threshold
             if bump['peak_value'] > upper_threshold:
-                # Check width of the bump
-                bump_width = (bump['end_date'] - bump['start_date']).days
+                # Calculate bump width as the time spent above the lower threshold
+                bump_rise_start = next((i for i in range(bump['start_index'], bump['peak_index'] + 1) if smoothed_values[i] > lower_threshold), bump['start_index'])
+                bump_fall_end = next((i for i in range(bump['peak_index'] + 1, bump['end_index'] + 1) if smoothed_values[i] < lower_threshold), bump['end_index'])
+                
+                bump_width = (timeline[bump_fall_end].date() - timeline[bump_rise_start].date()).days
                 if bump_width <= max_bump_width:
                     # Check number of days above upper threshold
                     days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
@@ -172,6 +175,31 @@ def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_thr
                         bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
                         filtered_bumps.append(bump)
     return filtered_bumps
+
+
+# OLD CODE - WORKS BUT WIDTH MIGHT NOT MAKE SENSE
+# def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_threshold, min_days_above_upper=7, max_bump_width=45):
+#     # Execute the steps
+#     labels = label_rise_fall(smoothed_values)
+#     bumps = identify_bumps(labels, smoothed_values, timeline)
+    
+#     filtered_bumps = []
+#     for bump in bumps:
+#         # Check if start and end are below lower threshold
+#         if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
+#             # Check if peak is above upper threshold
+#             if bump['peak_value'] > upper_threshold:
+#                 # Check width of the bump
+#                 bump_width = (bump['end_date'] - bump['start_date']).days
+#                 if bump_width <= max_bump_width:
+#                     # Check number of days above upper threshold
+#                     days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
+#                     if days_above_upper >= min_days_above_upper:
+#                         bump['days_above_upper'] = days_above_upper
+#                         # Find the first date above upper threshold
+#                         bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
+#                         filtered_bumps.append(bump)
+#     return filtered_bumps
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # OLD BUMP DETECTION FUNCTION - MISSES EDGE CASES AND COUNTS DAYS INCORRECTLY
@@ -323,6 +351,8 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                     'similarity_column': col,
                     'alpha': alpha,
                     'smoothed_values': smoothed_row_values,
+                    'lower_threshold':lower_threshold,
+                    'upper_threshold':upper_threshold,
                     'has_bumps': has_bumps,
                     'total_bumps': total_bumps,
                     'closest_bump_peak_date': closest_bump_peak_date,
