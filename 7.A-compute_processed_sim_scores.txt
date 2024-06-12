@@ -170,6 +170,7 @@ def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_thr
                     # Check number of days above upper threshold
                     days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
                     if days_above_upper >= min_days_above_upper:
+                        bump['days_above_lower'] = bump_width
                         bump['days_above_upper'] = days_above_upper
                         # Find the first date above upper threshold
                         bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
@@ -340,6 +341,7 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                     closest_bump_peak_value = closest_bump['peak_value']
                     closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
                     closest_bump_time_above_upper = closest_bump['days_above_upper']
+                    closest_bump_time_above_lower = closest_bump['days_above_lower']
                     
                     largest_bump = max(bumps, key=lambda x: x['peak_value'])
                     largest_bump_peak_date = largest_bump['peak_date']
@@ -358,6 +360,7 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                     'closest_bump_peak_date': closest_bump_peak_date,
                     'closest_bump_peak_value': closest_bump_peak_value,
                     'closest_bump_width': closest_bump_width,
+                    'closest_bump_time_above_lower': closest_bump_time_above_lower,
                     'closest_bump_time_above_upper': closest_bump_time_above_upper,
                     'largest_bump_peak_date': largest_bump_peak_date,
                     'largest_bump_peak_value': largest_bump_peak_value
