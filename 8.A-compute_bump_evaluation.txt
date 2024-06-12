@@ -23,13 +23,24 @@ ed_similarity_scores_path= ed_similarity_scores.get_path()
 ed_similarity_scores_processed = dataiku.Folder("hZfSC2LV")
 ed_similarity_scores_processed_path = ed_similarity_scores_processed.get_path()
 
-# Input dataset
+# Input datasets
+weekly_events_merged = dataiku.Dataset("weekly_events_merged")
+weekly_events_df = weekly_events_merged.get_dataframe()
+
 key_events_per_period = dataiku.Dataset("key_events_per_period")
-key_events_per_period_df = key_events_per_period.get_dataframe()
+key_events_df = key_events_per_period.get_dataframe()
+
+key_events_df.rename(columns={"key_event_id": "topic_id"},inplace = True)
+key_events_df = key_events_df.merge(weekly_events_df, on=['topic_id', 'start_date'],suffixes=('', '_y'))
+key_events_df.drop(key_events_df.filter(regex='_y$').columns, axis=1, inplace=True)
 
 # Output folder
 bump_evaluation = dataiku.Folder("bFPFsUEv")
 bump_evaluation_path = bump_evaluation.get_path()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Number of key ground truth events: ",len(key_events_df))
+key_events_df.head(1)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 experiment_jsons = load_experiment_jsons(
@@ -38,7 +49,7 @@ experiment_jsons = load_experiment_jsons(
                             experiment_details_subfolder = "bump_detection_experiment_details")
 # Add filter if necessary
 filtered_jsons = experiment_jsons
-filtered_jsons
+# filtered_jsons
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 for curr_json in filtered_jsons:
@@ -55,24 +66,153 @@ for curr_json in filtered_jsons:
     
     bump_df  = load_experiment_objects(experiment_jsons = [curr_json],
                             file_path_key = "bump_save_location")[0]
+    
+    bump_df = bump_df.merge(clusters_df, on=["topic_id","date"])
+    event_candidates_df = bump_df[bump_df["has_bumps"]]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-bump_df.total_bumps.value_counts()
+event_candidates_df = bump_df[bump_df["has_bumps"]]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-max_delta_days = 20
-bump_df = bump_df[(bump_df["has_bumps"]) & (bump_df["total_bumps"]<=2)]
-filtered_bump_df = bump_df[
-    bump_df.apply(lambda row: abs((row['closest_bump_peak_date'] - row['date']).days) <= max_delta_days, axis=1)
-]
+def add_compliance_metrics(bump_df):
+    # Define a function to calculate the compliance metrics
+    def calculate_metrics(row):
+        lower_threshold = row['lower_threshold']
+        upper_threshold = row['upper_threshold']
+        smoothed_values = row['smoothed_values']
+
+        # Calculate the percentage of values below the lower threshold
+        below_threshold_count = sum(value <= lower_threshold for value in smoothed_values)
+        percentage_below_lower = (below_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the min-max variance factor
+        max_value = max(smoothed_values)
+        min_value = min(smoothed_values)
+        variance = max_value - min_value
+        threshold_difference = upper_threshold - lower_threshold
+        variance_factor = variance / threshold_difference if threshold_difference != 0 else float('inf')  # Prevent division by zero
+
+        return pd.Series([percentage_below_lower, variance_factor], index=['percentage_below_lower', 'variance_factor'])
+
+    # Apply the function and add new columns to the DataFrame
+    bump_df[['percentage_below_lower', 'variance_factor']] = bump_df.apply(calculate_metrics, axis=1)
+    return bump_df
+
+# Apply the function to your DataFrame
+event_candidates_df = add_compliance_metrics(event_candidates_df)
+
+# Now you can easily filter and analyze the DataFrame based on the new metrics
+# filtered_bump_df = event_candidates_df[(event_candidates_df['percentage_below_lower'] >= 70) \
+#                                        & (event_candidates_df['variance_factor'] <= 5)]
+# print(f"Filtered DataFrame has {len(filtered_bump_df)} rows out of {len(event_candidates_df)} total rows.")
+
+# Filtering for topics whose peak is close to their date
+# max_delta_days = 15
+# filtered_bump_df = filtered_bump_df[
+#     filtered_bump_df.apply(lambda row: abs((row['closest_bump_peak_date'] - row['date']).days) <= max_delta_days, axis=1)
+# ]
+
+# Optionally, you can inspect the DataFrame to see the distribution or summary statistics
+print(filtered_bump_df[['percentage_below_lower', 'variance_factor']].describe())
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-counts = filtered_bump_df.groupby(['similarity_column', 'alpha']).size().reset_index(name='count')
-print(counts)
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# Setting aesthetics for seaborn
+sns.set(style="whitegrid")
+
+def visualize_distributions(data_frame):
+    # Histogram and Density Plot for 'percentage_below_lower'
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    sns.histplot(data_frame['percentage_below_lower'], kde=True, color='blue', bins=30)
+    plt.title('Distribution of % Below Lower Threshold')
+    plt.xlabel('% of Time Below Lower Threshold')
+    plt.ylabel('Frequency')
+
+    # Histogram and Density Plot for 'variance_factor'
+    plt.subplot(1, 2, 2)
+    sns.histplot(data_frame['variance_factor'], kde=True, color='green', bins=30)
+    plt.title('Distribution of Variance Factor')
+    plt.xlabel('Min-Max to Threshold Difference Factor')
+    plt.ylabel('Frequency')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Boxplots for detailed distribution analysis
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    sns.boxplot(y=data_frame['percentage_below_lower'], color='cyan')
+    plt.title('Boxplot of % Below Lower Threshold')
+    plt.ylabel('% of Time Below Lower Threshold')
+
+    plt.subplot(1, 2, 2)
+    sns.boxplot(y=data_frame['variance_factor'], color='lightgreen')
+    plt.title('Boxplot of Variance Factor')
+    plt.ylabel('Min-Max to Threshold Difference Factor')
+
+    plt.tight_layout()
+    plt.show()
+
+# Assuming 'event_candidates_df' is your DataFrame
+visualize_distributions(event_candidates_df)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-filtered_bump_df = filtered_bump_df.merge(clusters_df, on=["topic_id","date"])
-filtered_bump_df
+# def filter_by_lower_threshold(bump_df, percentage = 50):
+#     # Define a function that checks if at least 50% of values are below the lower threshold
+#     def check_threshold_compliance(row, percentage):
+#         lower_threshold = row['lower_threshold']
+#         smoothed_values = row['smoothed_values']
+#         # Calculate the number of values below the threshold
+#         below_threshold_count = sum(value <= lower_threshold for value in smoothed_values)
+#         # Check if at least 240 values are below the threshold
+#         return below_threshold_count >= len(smoothed_values)*(percentage/100)
+
+#     # Apply the function across the DataFrame and filter rows
+#     compliance_mask = bump_df.apply(check_threshold_compliance,percentage = percentage, axis=1)
+#     return bump_df[compliance_mask]
+
+# def filter_by_variance(bump_df, N):
+#     # Define a function that checks if the variance of smoothed_values does not exceed N times the threshold difference
+#     def check_variance_compliance(row, N):
+#         upper_threshold = row['upper_threshold']
+#         lower_threshold = row['lower_threshold']
+#         smoothed_values = row['smoothed_values']
+#         max_value = max(smoothed_values)
+#         min_value = min(smoothed_values)
+#         # Calculate the variance and the allowed maximum variance
+#         variance = max_value - min_value
+#         max_allowed_variance = N * (upper_threshold - lower_threshold)
+#         return variance <= max_allowed_variance
+
+#     # Apply the function across the DataFrame and filter rows
+#     variance_mask = bump_df.apply(check_variance_compliance, N=N, axis=1)
+#     return bump_df[variance_mask]
+
+# # Apply the filtering function
+# old_length = len(event_candidates_df)
+# event_candidates_df = filter_by_lower_threshold(event_candidates_df, percentage= 70)
+# print(f"Filtered DataFrame has {len(filtered_bump_df)} rows out of {old_length} total rows.")
+
+# N = 5  # Set the factor N according to your specific requirement
+# old_length = len(event_candidates_df)
+# event_candidates_df = filter_by_variance(event_candidates_df, N)
+# print(f"After variance filtering, DataFrame has {len(event_candidates_df)} rows out of {old_length} total rows.")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Number of candidate events across all smoothing combinations: ",len(event_candidates_df))
+event_candidates_df.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Number of bumps: \n", event_candidates_df.total_bumps.value_counts())
+bump_counts = event_candidates_df.groupby(['similarity_column', 'alpha']).size().reset_index(name='count')
+print("\nNumber of event candidates per combination: \n", bump_counts)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+bump_counts.sort_values(by="count")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 import matplotlib.pyplot as plt
@@ -81,7 +221,7 @@ import numpy as np
 import random
 import datetime
 
-def visualize_bumps(bump_df, N, sim_column, alpha = 0.03, filter_date =  datetime.date(2019,1,1)):
+def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date =  datetime.date(2019,1,1), max_date= datetime.date(2020,4,24)):
     # Extract the global start and end dates from the DataFrame
     global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
     global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
@@ -90,7 +230,10 @@ def visualize_bumps(bump_df, N, sim_column, alpha = 0.03, filter_date =  datetim
     timeline = pd.date_range(start=global_start_date, end=global_end_date)
     
     #
-    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column) &(bump_df["alpha"] == alpha)]
+    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column)\
+                          &(bump_df["alpha"] == alpha) \
+                          &(bump_df["date"] >=min_date)\
+                         &(bump_df["date"] <=max_date)]
     
     # Sample N random clusters
     sampled_clusters = filtered_df.sample(n=N, replace=False)
@@ -106,7 +249,7 @@ def visualize_bumps(bump_df, N, sim_column, alpha = 0.03, filter_date =  datetim
         smoothed_values = row['smoothed_values']
 
         # Plot original and smoothed values
-        ax.plot(timeline, smoothed_values, label='LOESS Smoothed', color='red')
+        ax.plot(timeline, smoothed_values, label=f'LOESS {alpha}', color='red')
 
         # Highlight the closest bump peak date
         if row['closest_bump_peak_date']:
@@ -125,6 +268,7 @@ def visualize_bumps(bump_df, N, sim_column, alpha = 0.03, filter_date =  datetim
     plt.show()
 
 # Example usage
-visualize_bumps(filtered_bump_df, N=5, sim_column = "max_sim_BERTopic_embedding_list", 
+visualize_bumps(event_candidates_df, N=5, sim_column = "max_sim_global_tfidf_representation_sentence_list", 
                 alpha = 0.04,
-                filter_date =  datetime.date(2020,2,5))
+                min_date =  datetime.date(2019,1,1),
+                max_date =  datetime.date(2020,4,24))
