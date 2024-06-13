@@ -16,6 +16,8 @@ from utils import (
     get_unique_dictionaries,
     save_combination_list,
 )
+import ast
+from tqdm import tqdm
 
 # Input folders
 ed_clusters_with_reps = dataiku.Folder("oiEvOl5p")
@@ -33,6 +35,20 @@ weekly_events_df = weekly_events_merged.get_dataframe()
 
 key_events_per_period = dataiku.Dataset("key_events_per_period")
 key_events_df = key_events_per_period.get_dataframe()
+
+# Fixing lists
+weekly_events_df['representative_docs'] = weekly_events_df['representative_docs'].apply(ast.literal_eval)
+weekly_events_df['ctfidf_representation'] = weekly_events_df['ctfidf_representation'].apply(ast.literal_eval)
+weekly_events_df['keybert_representation'] = weekly_events_df['keybert_representation'].apply(ast.literal_eval)
+weekly_events_df['tweet_ids'] = weekly_events_df['tweet_ids'].apply(ast.literal_eval)
+
+# Fixing date columns to get rid of hours, mins, seconds
+weekly_events_df['start_date'] = pd.to_datetime(weekly_events_df['start_date']).dt.date
+weekly_events_df['end_date'] = pd.to_datetime(weekly_events_df['end_date']).dt.date
+
+# Fixing date columns to get rid of hours, mins, seconds
+key_events_df['start_date'] = pd.to_datetime(key_events_df['start_date']).dt.date
+key_events_df['end_date'] = pd.to_datetime(key_events_df['end_date']).dt.date
 
 key_events_df.rename(columns={"key_event_id": "topic_id"},inplace = True)
 key_events_df = key_events_df.merge(weekly_events_df, on=['topic_id', 'start_date'],suffixes=('', '_y'))
@@ -79,6 +95,73 @@ for curr_json in filtered_jsons:
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 event_candidates_df = bump_df[bump_df["has_bumps"]]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Comparing Bump detection events to GPTs events
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def calculate_overlap(tweet_ids1, tweet_ids2):
+    set1 = set(tweet_ids1)
+    set2 = set(tweet_ids2)
+    intersection = len(set1.intersection(set2))
+    overlap_left = intersection / len(set1) if set1 else 0
+    overlap_right = intersection / len(set2) if set2 else 0
+    return overlap_left, overlap_right
+
+# Assuming weekly_events_df is loaded and ready
+np.random.seed(42)  # For reproducibility
+sampled_gpt_events = weekly_events_df.sample(n=200, random_state=42)
+
+# Assuming event_candidates_df has the necessary structure and data
+configurations = event_candidates_df[['similarity_column', 'alpha']].drop_duplicates()
+
+# Dictionary to store results DataFrames by configuration
+config_results = {}
+
+for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
+    results = []  # This will store results for the current configuration
+    filtered_candidates = event_candidates_df[
+        (event_candidates_df['similarity_column'] == config['similarity_column']) &
+        (event_candidates_df['alpha'] == config['alpha']) &
+        (event_candidates_df['has_bumps'] == True)
+    ]
+
+    for _, gpt_event in sampled_gpt_events.iterrows():
+        # Temporal filtering: daily events within the same week as the GPT event
+        same_week_candidates = filtered_candidates[
+            (filtered_candidates['date'] >= gpt_event['start_date']) &
+            (filtered_candidates['date'] <= gpt_event['end_date'])
+        ]
+
+        for _, candidate in same_week_candidates.iterrows():
+            tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
+
+            # Store the results
+            result = {
+                'gpt_start_date': gpt_event['start_date'],
+                'gpt_end_date': gpt_event['end_date'],
+                'gpt_id': gpt_event['topic_id'],
+                'gpt_name': gpt_event['event_name'],
+                'candidate_date': candidate['date'],
+                'candidate_id': candidate['topic_id'],
+                'tweet_overlap_left': tweet_overlap_left,
+                'tweet_overlap_right': tweet_overlap_right,
+                'gpt_keybert': gpt_event['keybert_representation'],
+                'candidate_keybert': candidate['keybert_representation'],
+            }
+            results.append(result)
+
+    # Store each configuration's results in a separate DataFrame within the dictionary
+    config_key = (config['similarity_column'], config['alpha'])
+    event_mappings = pd.DataFrame(results)
+    event_mappings = event_mappings[(event_mappings["tweet_overlap_left"]>=0.5)| \
+                                    (event_mappings["tweet_overlap_right"]>=0.5)]
+    config_results[config_key] = event_mappings
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+pd.set_option('display.expand_frame_repr', False)
+pd.set_option('max_colwidth', -1)
+config_results[('max_sim_global_tfidf_representation_weighted_list', 0.03)].sort_values(by =["tweet_overlap_left","tweet_overlap_right"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Adding columns for filtering - percentage of time above/below thresholds, variance_factor etc.
@@ -278,6 +361,3 @@ visualize_bumps(bump_df = filtered_bump_df,
                 alpha = 0.05,
                 min_date =  datetime.date(2019,1,1),
                 max_date =  datetime.date(2020,4,24))
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### Comparing Bump detection events to GPTs events
