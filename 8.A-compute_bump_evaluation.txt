@@ -93,11 +93,58 @@ for curr_json in filtered_jsons:
     bump_df = bump_df.merge(clusters_df, on=["topic_id","date"])
     event_candidates_df = bump_df[bump_df["has_bumps"]]
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-event_candidates_df = bump_df[bump_df["has_bumps"]]
-
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Comparing Bump detection events to GPTs events
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Ensure uniqueness by dropping duplicates before processing
+gpt_events_df = weekly_events_df
+event_candidates_df = bump_df[bump_df["has_bumps"]]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import pandas as pd
+import datetime
+import numpy as np
+
+# Load the Sentence Transformer model
+device = select_gpu_with_most_free_memory()
+model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', device=device)
+
+def join_and_encode(df, text_columns):
+    """Join terms in specified columns into a string and batch encode them."""
+    for column in tqdm(text_columns, desc = "Processing columns"):
+        df[column + '_joined'] = df[column].apply(lambda terms: ', '.join(terms))
+    unique_texts = pd.concat([df[col + '_joined'] for col in text_columns]).unique()
+    embeddings = model.encode(unique_texts, show_progress_bar=True)
+    # Normalize the embeddings
+    normalized_embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+    text_to_embedding = dict(zip(unique_texts, normalized_embeddings))
+    for column in text_columns:
+        df[column + '_embedding'] = df[column + '_joined'].map(text_to_embedding)
+    return df.drop(columns=[col + '_joined' for col in text_columns])
+
+def prepare_embeddings(df, text_columns, date_column):
+    # Create a copy of the DataFrame to avoid modifying the original
+    df_copy = df[text_columns + ['topic_id', date_column]].copy()
+    # Drop duplicates based on 'topic_id' and the date_column to ensure unique pairs
+    df_copy = df_copy.drop_duplicates(['topic_id', date_column])
+    df_copy.rename(columns={date_column: 'date'}, inplace=True)
+    df_copy.set_index(['topic_id', 'date'], inplace=True)
+    return join_and_encode(df_copy, text_columns)
+
+# Specify columns for representations
+gpt_text_columns = ['ctfidf_representation', 'keybert_representation']
+candidate_text_columns = ['ctfidf_representation', 'keybert_representation']
+
+# Prepare embeddings for GPT events and candidates without modifying the original DataFrames
+gpt_embeddings_df = prepare_embeddings(weekly_events_df, gpt_text_columns, 'start_date')
+candidate_embeddings_df = prepare_embeddings(bump_df[bump_df["has_bumps"]], candidate_text_columns, 'date')
+
+def calculate_cosine_similarity(embedding1, embedding2):
+    """Calculate the cosine similarity between two normalized embeddings."""
+    return np.dot(embedding1, embedding2)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def calculate_overlap(tweet_ids1, tweet_ids2):
@@ -110,7 +157,7 @@ def calculate_overlap(tweet_ids1, tweet_ids2):
 
 # Assuming weekly_events_df is loaded and ready
 np.random.seed(42)  # For reproducibility
-sampled_gpt_events = weekly_events_df.sample(n=200, random_state=42)
+sampled_gpt_events = gpt_events_df#.sample(n=200, random_state=42)
 
 # Assuming event_candidates_df has the necessary structure and data
 configurations = event_candidates_df[['similarity_column', 'alpha']].drop_duplicates()
@@ -118,6 +165,7 @@ configurations = event_candidates_df[['similarity_column', 'alpha']].drop_duplic
 # Dictionary to store results DataFrames by configuration
 config_results = {}
 
+# Loop over bump detection configs
 for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
     results = []  # This will store results for the current configuration
     filtered_candidates = event_candidates_df[
@@ -126,7 +174,14 @@ for _, config in tqdm(configurations.iterrows(), desc="Processing configurations
         (event_candidates_df['has_bumps'] == True)
     ]
 
+    # Preload all candidate embeddings for this config into a dictionary
+    candidate_embeddings_ctfidf = candidate_embeddings_df['ctfidf_representation_embedding'].to_dict()
+    candidate_embeddings_keybert = candidate_embeddings_df['keybert_representation_embedding'].to_dict()
+
     for _, gpt_event in sampled_gpt_events.iterrows():
+        gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'ctfidf_representation_embedding']  
+        gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'keybert_representation_embedding']
+        
         # Temporal filtering: daily events within the same week as the GPT event
         same_week_candidates = filtered_candidates[
             (filtered_candidates['date'] >= gpt_event['start_date']) &
@@ -134,6 +189,14 @@ for _, config in tqdm(configurations.iterrows(), desc="Processing configurations
         ]
 
         for _, candidate in same_week_candidates.iterrows():
+            # Use preloaded embeddings for faster access
+            candidate_key = (candidate["topic_id"], candidate["date"])
+            candidate_embedding_ctfidf = candidate_embeddings_ctfidf[candidate_key]
+            candidate_embedding_keybert = candidate_embeddings_keybert[candidate_key]
+            
+            cos_sim_ctfidf = calculate_cosine_similarity(candidate_embedding_ctfidf, gpt_embeddings_ctfidf)
+            cos_sim_keybert = calculate_cosine_similarity(candidate_embedding_keybert, gpt_embeddings_keybert)
+            
             tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
 
             # Store the results
@@ -142,21 +205,93 @@ for _, config in tqdm(configurations.iterrows(), desc="Processing configurations
                 'gpt_end_date': gpt_event['end_date'],
                 'gpt_id': gpt_event['topic_id'],
                 'gpt_name': gpt_event['event_name'],
+                
                 'candidate_date': candidate['date'],
                 'candidate_id': candidate['topic_id'],
+                
                 'tweet_overlap_left': tweet_overlap_left,
                 'tweet_overlap_right': tweet_overlap_right,
+                
                 'gpt_keybert': gpt_event['keybert_representation'],
                 'candidate_keybert': candidate['keybert_representation'],
+                'cos_sim_keybert': cos_sim_keybert,
+                
+                'gpt_ctfidf': gpt_event['ctfidf_representation'],
+                'candidate_ctfidf': candidate['ctfidf_representation'],
+                'cos_sim_ctfidf': cos_sim_ctfidf,
             }
             results.append(result)
 
     # Store each configuration's results in a separate DataFrame within the dictionary
     config_key = (config['similarity_column'], config['alpha'])
     event_mappings = pd.DataFrame(results)
-    event_mappings = event_mappings[(event_mappings["tweet_overlap_left"]>=0.5)| \
-                                    (event_mappings["tweet_overlap_right"]>=0.5)]
+    event_mappings = event_mappings[(event_mappings["tweet_overlap_left"] >= 0.5) | (event_mappings["tweet_overlap_right"] >= 0.5)]
     config_results[config_key] = event_mappings
+
+print("Similarity calculations completed.")
+
+# for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
+#     results = []  # This will store results for the current configuration
+#     filtered_candidates = event_candidates_df[
+#         (event_candidates_df['similarity_column'] == config['similarity_column']) &
+#         (event_candidates_df['alpha'] == config['alpha']) &
+#         (event_candidates_df['has_bumps'] == True)
+#     ]
+
+#     for _, gpt_event in sampled_gpt_events.iterrows():
+#         gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
+#                                                       'ctfidf_representation_embedding']  
+#         gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
+#                                                       'keybert_representation_embedding']
+        
+#         # Temporal filtering: daily events within the same week as the GPT event
+#         same_week_candidates = filtered_candidates[
+#             (filtered_candidates['date'] >= gpt_event['start_date']) &
+#             (filtered_candidates['date'] <= gpt_event['end_date'])
+#         ]
+
+#         for _, candidate in same_week_candidates.iterrows():
+            
+#             candidate_embeddings_ctfidf = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
+#                                                       'ctfidf_representation_embedding']
+#             candidate_embeddings_keybert = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
+#                                                       'keybert_representation_embedding']
+            
+            
+#             cos_sim_ctfidf = calculate_cosine_similarity(candidate_embeddings_ctfidf, gpt_embeddings_ctfidf)
+#             cos_sim_keybert = calculate_cosine_similarity(candidate_embeddings_keybert, gpt_embeddings_keybert)
+            
+#             tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
+
+#             # Store the results
+#             result = {
+#                 'gpt_start_date': gpt_event['start_date'],
+#                 'gpt_end_date': gpt_event['end_date'],
+#                 'gpt_id': gpt_event['topic_id'],
+#                 'gpt_name': gpt_event['event_name'],
+                
+#                 'candidate_date': candidate['date'],
+#                 'candidate_id': candidate['topic_id'],
+                
+#                 'tweet_overlap_left': tweet_overlap_left,
+#                 'tweet_overlap_right': tweet_overlap_right,
+                
+#                 'gpt_keybert': gpt_event['keybert_representation'],
+#                 'candidate_keybert': candidate['keybert_representation'],
+#                 'cos_sim_keybert': cos_sim_keybert,
+                
+#                 'gpt_ctfidf': gpt_event['ctfidf_representation'],
+#                 'candidate_ctfidf': candidate['ctfidf_representation'],
+#                 'cos_sim_ctfidf': cos_sim_ctfidf,
+#             }
+#             results.append(result)
+
+#     # Store each configuration's results in a separate DataFrame within the dictionary
+#     config_key = (config['similarity_column'], config['alpha'])
+#     event_mappings = pd.DataFrame(results)
+#     event_mappings = event_mappings[(event_mappings["tweet_overlap_left"]>=0.5)| \
+#                                     (event_mappings["tweet_overlap_right"]>=0.5)]
+#     config_results[config_key] = event_mappings
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 pd.set_option('display.expand_frame_repr', False)
@@ -356,8 +491,8 @@ bump_counts.sort_values(by="count")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 visualize_bumps(bump_df = filtered_bump_df,
-                N=20, 
-                sim_column = "max_sim_keybert_representation_average_list", 
-                alpha = 0.05,
-                min_date =  datetime.date(2019,1,1),
+                N=5, 
+                sim_column = "max_sim_global_tfidf_representation_weighted_list", 
+                alpha = 0.03,
+                min_date =  datetime.date(2020,2,1),
                 max_date =  datetime.date(2020,4,24))
