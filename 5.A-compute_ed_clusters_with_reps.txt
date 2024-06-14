@@ -319,7 +319,8 @@ def get_vectorizer_settings(num_docs):
     return adjusted_min_df, adjusted_max_df
 
 
-def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, global_vectorizer = TfidfVectorizer(), verbose=False):
+def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, nr_repr_docs = 10,\
+                       global_vectorizer = TfidfVectorizer(), verbose=False):
     cluster_results = []
 
     statistics = {
@@ -409,12 +410,12 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, global_vectoriz
         # Extracting main info that we need
         topic_info = topic_model.get_topic_info()
         topic_info = topic_info[topic_info['Topic'] != -1]  # Ignore outliers
-        topic_info = topic_info[['Topic', 'Count','Representative_Docs','Representation','keybert']]
+        topic_info = topic_info[['Topic', 'Count','Representation','keybert']] #'Representative_Docs' - changed extraction
 
         topic_info.rename(columns={
             'Topic': 'topic_id',
             'Count': 'cluster_size',
-            'Representative_Docs': 'repr_docs',
+#             'Representative_Docs': 'repr_docs',
             'Representation': 'ctfidf_representation',
             'keybert': 'keybert_representation',
         }, inplace=True)
@@ -431,6 +432,26 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, global_vectoriz
         # Extracting BERTopic Embeddings of each topic
         topic_embeddings = topic_model.topic_embeddings_[1:]
         topic_info['BERTopic_embedding'] = topic_embeddings.tolist()
+                  
+        # Extract nr_repr_docs documents for each cluster
+        topic_info['repr_docs'] = None
+        # Step 1 - Create a DataFrame with documents, IDs, and topics
+        documents = pd.DataFrame({
+            "Document": day_docs,
+            "ID": range(len(day_docs)),
+            "Topic": topics
+        })
+
+        # Step 2 - Get representative documents from topic_model
+        repr_docs, _, _, _ = topic_model._extract_representative_docs(
+            c_tf_idf=topic_model.c_tf_idf_,
+            documents=documents,
+            topics=topic_model.topic_representations_,
+            nr_repr_docs = nr_repr_docs
+        )
+
+        # Add representative documents to the topic_info DataFrame
+        topic_info['repr_docs'] = topic_info['topic_id'].apply(lambda x: repr_docs.get(x, []))          
 
         # Create a dictionary to map topics to tweet IDs
         topic_to_tweet_ids = {topic_id: [] for topic_id in topic_info['topic_id']}
@@ -441,7 +462,6 @@ def perform_clustering(grouped_tweets, hdbscan_config, top_n=10, global_vectoriz
         # Add tweet IDs and representative docs to the topic_info DataFrame
         topic_info['tweet_ids'] = topic_info['topic_id'].map(topic_to_tweet_ids)
         topic_info['date'] = date
-                  
                     
         # Add representations based on global TF-IDF vectorizer
         tfidf_representations = []
@@ -535,6 +555,7 @@ for curr_json in original_experiments: # list containing previous UMAPs that we 
                                          grouped_tweets = grouped_tweets,
                                          hdbscan_config = hdbscan_config,
                                          top_n = 10,
+                                         nr_repr_docs = 10,
                                          global_vectorizer = global_vectorizer,
                                          verbose = verbose)
         cluster_df_list.append(clusters_df)
