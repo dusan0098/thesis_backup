@@ -94,6 +94,124 @@ for curr_json in filtered_jsons:
     event_candidates_df = bump_df[bump_df["has_bumps"]]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Extracting ground_truth events
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+max_delta_days = 7
+
+# Create a condition to filter rows - has bump and bump is close
+condition = (bump_df['closest_bump_peak_date'].isna()) \
+            | (abs((bump_df['closest_bump_peak_date'] - bump_df['date']).apply(lambda x: x.days)) <= max_delta_days) 
+
+# Filter the DataFrame based on the condition
+close_bumps_df = bump_df[condition]
+
+# Display the filtered DataFrame
+close_bumps_df
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# 1. Counting the number of rows (configs) where has_bumps is True for each cluster (grouped by date and topic_id)
+cluster_bump_counts = close_bumps_df.groupby(['date', 'topic_id'])['has_bumps'].sum().reset_index()
+cluster_bump_counts.rename(columns={'has_bumps': 'num_bumps'}, inplace=True)
+
+# 2. Counting the number of unique similarity_column values where at least one config has has_bumps as True
+# First, create a boolean DataFrame to indicate if there's any bump for each similarity_column within each cluster
+bump_presence_per_similarity = close_bumps_df.groupby(['date', 'topic_id', 'similarity_column'])['has_bumps'].any().reset_index()
+
+# Then, count the unique similarity_column values where has_bumps is True for each cluster
+similarity_bump_counts = bump_presence_per_similarity.groupby(['date', 'topic_id'])['has_bumps'].sum().reset_index()
+similarity_bump_counts.rename(columns={'has_bumps': 'num_similarity_columns_with_bumps'}, inplace=True)
+
+# Ensuring all clusters are included by merging with the original clusters
+all_clusters = close_bumps_df[['date', 'topic_id']].drop_duplicates()
+similarity_bump_counts = all_clusters.merge(similarity_bump_counts, on=['date', 'topic_id'], how='left').fillna(0)
+similarity_bump_counts['num_similarity_columns_with_bumps'] = similarity_bump_counts['num_similarity_columns_with_bumps'].astype(int)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+#cluster_bump_counts.sort_values(by = "num_bumps", ascending = False)
+#similarity_bump_counts.sort_values(by = "num_similarity_columns_with_bumps", ascending = False)
+
+# Plotting Histogram and Density for Config Counts
+plt.figure(figsize=(12, 6))
+sns.histplot(cluster_bump_counts['num_bumps'], kde=False, bins=range(0, 34))
+plt.title('Histogram and Density for Config Counts')
+plt.xlabel('Config number')
+plt.ylabel('Frequency')
+plt.xticks(range(0, 34, 2))  # Adjust x-axis ticks to show every second number
+plt.show()
+
+# Plotting Histogram and Density for Similarity Column Counts
+plt.figure(figsize=(12, 6))
+sns.histplot(similarity_bump_counts['num_similarity_columns_with_bumps'], kde=False, bins=range(0, 10))
+plt.title('Histogram and Density for Similarity Column Counts')
+plt.xlabel('Different configs number')
+plt.ylabel('Frequency')
+plt.xticks(range(0, 10, 1))  # Adjust x-axis ticks to show every number
+plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import os
+# Count the number of clusters in each category
+high_threshold = 4
+medium_threshold = 1
+
+high_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] >= high_threshold]
+moderate_event_clusters = cluster_bump_counts[(cluster_bump_counts['num_bumps'] >= medium_threshold)\
+                                              & (cluster_bump_counts['num_bumps'] < high_threshold)]
+low_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] < medium_threshold]
+
+# Define the sample sizes for each category
+total_sample_size = 100
+high_event_sample_size = max(25, int((len(high_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
+moderate_event_sample_size = max(25, int((len(moderate_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
+low_event_sample_size = total_sample_size - high_event_sample_size - moderate_event_sample_size
+
+# Randomly sample clusters within each category
+high_event_sample = high_event_clusters.sample(n=high_event_sample_size, random_state=42)
+moderate_event_sample = moderate_event_clusters.sample(n=moderate_event_sample_size, random_state=42)
+low_event_sample = low_event_clusters.sample(n=low_event_sample_size, random_state=42)
+
+# Combine the samples
+sampled_clusters = pd.concat([high_event_sample, moderate_event_sample, low_event_sample])
+
+def assign_category(num_bumps):
+    if num_bumps >= high_threshold:
+        return 'high'
+    elif num_bumps >= medium_threshold:
+        return 'medium'
+    else:
+        return 'low'
+
+# Add cluster category to sampled_clusters
+sampled_clusters['category'] = sampled_clusters['num_bumps'].apply(assign_category)
+
+# Merge sampled_clusters with clusters_df to get the full information
+sampled_cluster_info = pd.merge(
+    sampled_clusters,
+    clusters_df,
+    on=['topic_id', 'date'],
+    how='left'
+)
+
+# Save the sampled cluster information to a file
+output_file_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.csv')
+sampled_cluster_info.to_csv(output_file_path, index=False)
+
+# Verify the sample distribution
+print("Sampled cluster information saved to:", output_file_path)
+sampled_cluster_info.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+key_info = sampled_cluster_info[["date","ctfidf_representation","keybert_representation","global_tfidf_representation","repr_docs"]]
+# 0 false
+# 1 true
+# 2 false
+# 3
+index = 3
+for key,value in key_info.iloc[index].items():
+    print("Column:",key,", value:", value)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Comparing Bump detection events to GPTs events
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
