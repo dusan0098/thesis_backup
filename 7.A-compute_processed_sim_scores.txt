@@ -350,18 +350,24 @@ def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 
                 bump_records.append({
                     'topic_id': row['topic_id'],
                     'date': row['date'],
+                    
                     'similarity_column': col,
                     'alpha': alpha,
+                    
                     'smoothed_values': smoothed_row_values,
                     'lower_threshold':lower_threshold,
                     'upper_threshold':upper_threshold,
                     'has_bumps': has_bumps,
                     'total_bumps': total_bumps,
+                    
                     'closest_bump_peak_date': closest_bump_peak_date,
                     'closest_bump_peak_value': closest_bump_peak_value,
+                    'closest_bump_start_date': closest_bump['start_date'],
+                    'closest_bump_end_date': closest_bump['end_date'],
                     'closest_bump_width': closest_bump_width,
                     'closest_bump_time_above_lower': closest_bump_time_above_lower,
                     'closest_bump_time_above_upper': closest_bump_time_above_upper,
+                    
                     'largest_bump_peak_date': largest_bump_peak_date,
                     'largest_bump_peak_value': largest_bump_peak_value
                 })
