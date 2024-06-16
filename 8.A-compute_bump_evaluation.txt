@@ -108,7 +108,7 @@ condition = (bump_df['has_bumps']==False) \
 close_bumps_df = bump_df[condition]
 
 # Display the filtered DataFrame
-close_bumps_df
+close_bumps_df.head(3)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # 1. Counting the number of rows (configs) where has_bumps is True for each cluster (grouped by date and topic_id)
@@ -195,123 +195,142 @@ sampled_cluster_info = pd.merge(
 )
 
 # Save the sampled cluster information to a file
-output_file_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.csv')
-sampled_cluster_info.to_csv(output_file_path, index=False)
+#output_file_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.csv')
+#sampled_cluster_info.to_csv(output_file_path, index=False)
 
 # Verify the sample distribution
-print("Sampled cluster information saved to:", output_file_path)
+#print("Sampled cluster information saved to:", output_file_path)
 sampled_cluster_info.head(3)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Potential events 
-# 1. Thuringen Crisis
+# sample_pickle_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.pkl')
+# sampled_cluster_info.to_pickle(sample_pickle_path)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-key_info = sampled_cluster_info[["date","ctfidf_representation","keybert_representation","global_tfidf_representation","repr_docs"]]
-# 0, false, SPD possibly handing over passwords through legislation, no clear event or reactions
-# 1, false, gratitude towards frontline workers during the COVID-19 crisis, particularly around March 20, 2020.
-# 2, true, 75th anniversary of the liberation of Auschwitz
-# 3, true, Iranian retaliatory strikes against US military bases, which occurred shortly after the US drone strike that killed Qasem Soleimani
-# 4, false, youtuber Rezo goes viral for criticising all german political parties and claiming they are creating a divide
-# 5, false, discussion about transition in transport, only recent info is on lack of train drivers
-# 6, true, humanitarian crisis in the Mediterranean, particularly concerning the rescue and distribution of migrants and refugees. immediate rescue needs and alleviate pressure on frontline states like Italy and Malta.
-# 7, true, initiative proposed by Defense Minister Kramp-Karrenbauer regarding the establishment of an international security zone in northern Syria. It reflects efforts to address the humanitarian crisis and stabilize the conflict-ridden region 
-# 8, true, debates about reform to childrens benefits and general welfare proposed by Minister Franziska Giffey 
-# 9, false, debates surrounding proposals for expropriation as a solution to the housing affordability crisis
-# 10, false, basic disagreements around government expenses between socialist and liberal parties, no clear event
-# 11, true, unveiling and public reaction to Germany's climate package in 2019, adopted 10 days later
-# 12, false, parliamentary debate surrounding economic policies, specifically concerning the social market economy, VAT fraud, VAT fraud started being discussed in the media at this period, but no convictions until years later
-# 13, false, discussion about tax policy, and issues with tax evasion
-# 14, false, discussion about antisemitism within the Muslim community
-# 15, false, reflects general ongoing policy discussions and advocacy efforts regarding transportation and climate goals 
-# 16, true, reaction to terrorist attack in Halle synagogue Germany, mentions antisemitism and right-wind extremists
-# 17, false, ongoing societal issues and discussions around job security - no clear event
-# 18, true, war in northern Syria, proposals for a UN-led security zone and the responses from various European countries
-# 19, false, ongoing discussions and debates related to transportation policies, environmental concerns, and political accountability
-# 20, false, controversy surrounding plans for deportations to Syria due to concerns and human rights considerations
-# 21, false, primarily focus on the political deadlock and controversies surrounding the expansion of renewable energies, particularly wind and solar power
-# 22, false, debates within the German political landscape concerning taxation policies
-# 23, false, debates regarding the direction and effectiveness of energy policies in achieving climate targets.
-# 24, false, discussions and legislative efforts in Germany regarding the rise of right-wing extremism and antisemitism
-# 25, false, 40 years of the green party 
-# 26, false, discussions about environmental policies, motivated by Wildfires in Australia, but they are not the focus
-# 27, true, 70th anniversary of the Council of Europe 
-# 28, true, reaction to recent murder of Walter Lubcke and the general rise of right-wing extremism
-# 29, false, mixed cluster, no clear place/event that it is tied to, mentions of earlier (2018) Marches of Pegida/AfD
-# 30, true, Christine Lambrecht's speech condemning right-wing extremism and violence in the Bundestag, addressing issues related to the NSU and specific incidents like the murder of Walter Lübcke.
-# 31, true, the activities and statements of the AfD faction regarding their visit to Syria and the subsequent release of a documentary
-# 32, true, 70th anniversary of the Council of Europe 
-# 33, true, rejection of expansion of CO2 reduction strategies in the Bundestag - as part of broader EU emssions scheme
-# 34, true, criticism and reactions to Ursula von der Leyen's appointment as Defense Minister despite previous statements about not seeking such positions, reflecting on credibility and political strategies
-# 35, false, general discussion about taxation, digitalization, and social issues like poverty and inequality 
-# 36, false, mixed cluster - random greetings from Hamburg and issues with providing Ventilators during Covid-19
-# 37, true, reaction to classification of wirsindmehr protests as left-wing extremism in Saxony on May 16, 2019. ties in to general issues of neo-nazis in eastern germany
-# 38, false, debates surrounding tax policies, particularly the push for tax reductions and economic implications
-# 39, true, discussion about the types and availabilty of masks during the Covid-19 pandemic
-# 40, false, small cluster, various topics such as parliamentary debates (Bundestag), personal opinions and experiences, calls for action regarding issues like Duogynon, and inquiries about political responses
-# 41, true, Day of Persons with Disabilities - discussions about the ongoing challenges faced by people with disabilities, efforts to improve access to education, employment, and healthcare, and the importance of raising awareness and societal support
-# 42, false, mixed topic - reactions to SPDs proposed changes to Pension policy, accusations of sexism within the party as one of the female members of SPD was ignored
-# 43, false, general campaign statements 3 weeks before EU 2019 elections, AfD calls for more independence from Brussels 
-# 44, false, impact of wage policies on part-time workers, criticisms of current thresholds, and proposals for dynamic adjustments 
-# 45, false, debates around the fairness of pension schemes, criticisms of proposed policies, and the impact of pension reforms
-# 46, true, International Workers Day (May 1st), themes of solidarity, social justice, and European integration
-# 47, true, Day against the Use of Child Soldiers (RedHandDay) - focus on raising awareness, advocating against the use of child soldiers in armed conflicts, and calling for global action to address this humanitarian crisis
-# 48, false, introduction and debates surrounding the Grundrente policy in Germany, highlighting discussions on fairness
-# 49, false, discussion of participation of women in parlament and how to achieve parity, tied in to 100 years of women's suffrage
-# 50, false, range of issues within education, consumer rights and general economic matters being discussed as 2019 ends
-# 51, false, mentions of Advent activities (Adventssingen) and reflections on historical writings by Dietrich Bonhoeffer, marking 75 years since their creation.
-# 52, false, internal discussion about reorganization within the SPD
-# 53, false, initiatives on icreasing usage of wind energy in 2020
-# 54, false, solving legal ambiguities regarding the Gemeinsame Terrorismusabwehrzentrum (GTAZ) as of November 2019. 
-# 55, true, abortion rights -calls for protests on January 26th at Rosa-Luxemburg-Platz in Berlin against Paragraph 219a, highlighting the importance of sexual self-determination
-# 56, false, May 8th anniversary (end of WW2), general reflections 
-# 57, true, escalation of Covid-19 pandemic, border closure, debates over border policies and closures, economic impacts, and efforts to combat misinformation
-# 58, false, range of discussions on human rights, historical events like the peaceful revolution in Berlin, legislative actions needed regarding supply chains, and Germany's stance on international human rights issues
-# 59, false, range of discussions - establishment of the German Foundation for Engagement and Volunteerism, Franziska Giffey's role as the Minister for Family Affairs
-# 60, true, humanitarian crisis in the Mediterranean Sea, focusing on sea rescue operations
-# 61, false, discussions around climate change mitigation strategies focusing on tree planting initiatives, forest management reforms
-# 62, false, mixed cluster no clear topic, personal annegdotes
-# 63, false, reactions to general statements made during the 2020 Munich Security Council
-# 64, false, general discussions on human rights, no clear motivation
-# 65, false, discussion series denoted as "3K20", where participants or speakers express their views on standing firm with their opinions and goals
-# 66, false,  initiatives and debates around traffic safety and policy reform, particularly regarding cycling infrastructure and speed limits
-# 67, false, general discussions about Covid-19 pandemic, no clear development
-# 68, false, discussions about railway issues in hanburg and local events from the AfD
-# 69, false, ongoing discussions and activities related to healthcare policy, emergency services, and digitalization efforts in healthcare
-# 70, false, remembering past tragedies caused by right-wing extremism, assessing current threats, and advocating for collective action against such ideologies
-# 71, false, debates ranging from electoral mechanics to ideological positioning and public perception of political figures
-# 72, false, active debates concerning the Identitarian Movement's role in politics and society, with a focus on its classification as a right-wing extremist group
-# 73, false, 30th anniversary Tiananmen Square Massacre and discussions on relations with china
-# 74, true, reactions to Brandenburg and Saxony state elections in 2019
-# 75, false, discussions on climate policy, climate goals, and the urgency of addressing climate change
-# 76, false, casual conversations
-# 77, false, statements about Macrons calls for EU reform ahead of EU elections
-# 78, false, criticism about fascist tendencies calling on the recent Thuringen election results (1 month prior)
-# 79, false, criticism and debates surrounding the actions and statements of CDU politicians and statements about possible alliances in Thuringen
-# 80, true, results of presidential elections in Slovakia, seen as a positive development for liberal and pro-European movements across the continent
-# 81, false, analysis of public sentiment and political responses to media reports, polls, and surveys on climate change issues
-# 82, false, mixed - human rights advocacy based on 25 years of Rwandan genocide, discussion about rights on International Roma Day
-# 83, false, discussion about global vaccine development, and making sure that it is available to all, no clear events
-# 84, false, Participation of influencers and politicians like Philipp Amthor in discussions regarding youth involvement in politics and future political rights
-# 85, false, mix of human rights issues, domestic policy, and recent diplomatic visits by Frank-Walter Steinmeier
-# 86, false, legal and policy debates,  related to constitutional interpretations or legislative proposals, no clear goal or proposal
-# 87, false, mix of activities, discussions, personal reflections in Düsseldorf and Berlin, involving local leaders, visitors, and community members.
-# 88, false, general discussions about migration and human rights, internal debates within the AfD
-# 89, false, mix of Discussions and engagements by political figures like Jürgen Klein, focusing on regional agendas and party activities and sports achievemts
-# 90, true, reaction to sentence of Ojub Titiev, calls for fair trials and international pressure on Russia to uphold human rights
-# 91, false, mix of many local events
-# 92, false, mix of internal AfD elections and meeting of ministers
-# 93, false, discussions on healthcare policy, patient rights, and decision-making processes
-# 94, false, 70th anniversary of NATO and discussion about Germany's role within the organisation
-# 95, false, small mixed cluster no specific context or details
-# 96, false, support for EU accession talks involving North Macedonia and Albania from Germany
-# 97, false, discussion about possible price increase on CO2 emissions
-# 98, false, mix of criticism of Minister Andreas Scheuers plan on road toll/tax as well as changes in Die Linke and SPD
-# 99, false, criticism of AfD and Die Linke on their stance for criminalization of sea rescue operations (Seenotrettung).
+sample_pickle_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.pkl')
+sampled_cluster_info =  pd.read_pickle(sample_pickle_path)
+sampled_cluster_info.head(3)
 
-index = 99
-for key,value in key_info.iloc[index].items():
-    print("Column:",key,", value:", value)
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+notes = [
+(0, False, "SPD possibly handing over passwords through legislation, no clear event or reactions"),
+(1, False, "gratitude towards frontline workers during the COVID-19 crisis, particularly around March 20, 2020"),
+(2, True, "75th anniversary of the liberation of Auschwitz"),
+(3, True, "Iranian retaliatory strikes against US military bases, which occurred shortly after the US drone strike that killed Qasem Soleimani"),
+(4, False, "youtuber Rezo goes viral for criticising all german political parties and claiming they are creating a divide"),
+(5, False, "discussion about transition in transport, only recent info is on lack of train drivers"),
+(6, True, "humanitarian crisis in the Mediterranean, particularly concerning the rescue and distribution of migrants and refugees. immediate rescue needs and alleviate pressure on frontline states like Italy and Malta."),
+(7, True, "initiative proposed by Defense Minister Kramp-Karrenbauer regarding the establishment of an international security zone in northern Syria. It reflects efforts to address the humanitarian crisis and stabilize the conflict-ridden region"),
+(8, True, "debates about reform to childrens benefits and general welfare proposed by Minister Franziska Giffey"),
+(9, False, "debates surrounding proposals for expropriation as a solution to the housing affordability crisis"),
+(10, False, "basic disagreements around government expenses between socialist and liberal parties, no clear event"),
+(11, True, "unveiling and public reaction to Germany's climate package in 2019, adopted 10 days later"),
+(12, False, "parliamentary debate surrounding economic policies, specifically concerning the social market economy, VAT fraud, VAT fraud started being discussed in the media at this period, but no convictions until years later"),
+(13, False, "discussion about tax policy, and issues with tax evasion"),
+(14, False, "discussion about antisemitism within the Muslim community"),
+(15, False, "reflects general ongoing policy discussions and advocacy efforts regarding transportation and climate goals"),
+(16, True, "reaction to terrorist attack in Halle synagogue Germany, mentions antisemitism and right-wind extremists"),
+(17, False, "ongoing societal issues and discussions around job security - no clear event"),
+(18, True, "war in northern Syria, proposals for a UN-led security zone and the responses from various European countries"),
+(19, False, "ongoing discussions and debates related to transportation policies, environmental concerns, and political accountability"),
+(20, False, "controversy surrounding plans for deportations to Syria due to concerns and human rights considerations"),
+(21, False, "primarily focus on the political deadlock and controversies surrounding the expansion of renewable energies, particularly wind and solar power"),
+(22, False, "debates within the German political landscape concerning taxation policies"),
+(23, False, "debates regarding the direction and effectiveness of energy policies in achieving climate targets."),
+(24, False, "discussions and legislative efforts in Germany regarding the rise of right-wing extremism and antisemitism"),
+(25, False, "40 years of the green party "),
+(26, False, "discussions about environmental policies, motivated by Wildfires in Australia, but they are not the focus"),
+(27, True, "70th anniversary of the Council of Europe "),
+(28, True, "reaction to recent murder of Walter Lubcke and the general rise of right-wing extremism"),
+(29, False, "mixed cluster, no clear place/event that it is tied to, mentions of earlier (2018) Marches of Pegida/AfD"),
+(30, True, "Christine Lambrecht's speech condemning right-wing extremism and violence in the Bundestag, addressing issues related to the NSU and specific incidents like the murder of Walter Lübcke."),
+(31, True, "the activities and statements of the AfD faction regarding their visit to Syria and the subsequent release of a documentary"),
+(32, True, "70th anniversary of the Council of Europe "),
+(33, True, "rejection of expansion of CO2 reduction strategies in the Bundestag - as part of broader EU emssions scheme"),
+(34, True, "criticism and reactions to Ursula von der Leyen's appointment as Defense Minister despite previous statements about not seeking such positions, reflecting on credibility and political strategies"),
+(35, False, "general discussion about taxation, digitalization, and social issues like poverty and inequality"),
+(36, False, "mixed cluster - random greetings from Hamburg and issues with providing Ventilators during Covid-19"),
+(37, True, "reaction to classification of wirsindmehr protests as left-wing extremism in Saxony on May 16, 2019. ties in to general issues of neo-nazis in eastern germany"),
+(38, False, "debates surrounding tax policies, particularly the push for tax reductions and economic implications"),
+(39, True, "discussion about the types and availabilty of masks during the Covid-19 pandemic"),
+(40, False, "small cluster, various topics such as parliamentary debates (Bundestag), personal opinions and experiences, calls for action regarding issues like Duogynon, and inquiries about political responses"),
+(41, True, "Day of Persons with Disabilities - discussions about the ongoing challenges faced by people with disabilities, efforts to improve access to education, employment, and healthcare, and the importance of raising awareness and societal support"),
+(42, False, "mixed topic - reactions to SPDs proposed changes to Pension policy, accusations of sexism within the party as one of the female members of SPD was ignored"),
+(43, False, "general campaign statements 3 weeks before EU 2019 elections, AfD calls for more independence from Brussels"),
+(44, False, "impact of wage policies on part-time workers, criticisms of current thresholds, and proposals for dynamic adjustments"),
+(45, False, "debates around the fairness of pension schemes, criticisms of proposed policies, and the impact of pension reforms"),
+(46, True, "International Workers Day (May 1st), themes of solidarity, social justice, and European integration"),
+(47, True, "Day against the Use of Child Soldiers (RedHandDay) - focus on raising awareness, advocating against the use of child soldiers in armed conflicts, and calling for global action to address this humanitarian crisis"),
+(48, False, "introduction and debates surrounding the Grundrente policy in Germany, highlighting discussions on fairness"),
+(49, False, "discussion of participation of women in parlament and how to achieve parity, tied in to 100 years of women's suffrage"),
+(50, False, "range of issues within education, consumer rights and general economic matters being discussed as 2019 ends"),
+(51, False, "mentions of Advent activities (Adventssingen) and reflections on historical writings by Dietrich Bonhoeffer, marking 75 years since their creation."),
+(52, False, "internal discussion about reorganization within the SPD"),
+(53, False, "initiatives on icreasing usage of wind energy in 2020"),
+(54, False, "solving legal ambiguities regarding the Gemeinsame Terrorismusabwehrzentrum (GTAZ) as of November 2019."),
+(55, True, "abortion rights -calls for protests on January 26th at Rosa-Luxemburg-Platz in Berlin against Paragraph 219a, highlighting the importance of sexual self-determination"),
+(56, False, "May 8th anniversary (end of WW2), general reflections "),
+(57, True, "escalation of Covid-19 pandemic, border closure, debates over border policies and closures, economic impacts, and efforts to combat misinformation"),
+(58, False, "range of discussions on human rights, historical events like the peaceful revolution in Berlin, legislative actions needed regarding supply chains, and Germany's stance on international human rights issues"),
+(59, False, "range of discussions - establishment of the German Foundation for Engagement and Volunteerism, Franziska Giffey's role as the Minister for Family Affairs"),
+(60, True, "humanitarian crisis in the Mediterranean Sea, focusing on sea rescue operations"),
+(61, False, "discussions around climate change mitigation strategies focusing on tree planting initiatives, forest management reforms"),
+(62, False, "mixed cluster no clear topic, personal annegdotes"),
+(63, False, "reactions to general statements made during the 2020 Munich Security Council"),
+(64, False, "general discussions on human rights, no clear motivation"),
+(65, False, "discussion series denoted as '3K20', where participants or speakers express their views on standing firm with their opinions and goals"),
+(66, False, "initiatives and debates around traffic safety and policy reform, particularly regarding cycling infrastructure and speed limits"),
+(67, False, "general discussions about Covid-19 pandemic, no clear development"),
+(68, False, "discussions about railway issues in hanburg and local events from the AfD"),
+(69, False, "ongoing discussions and activities related to healthcare policy, emergency services, and digitalization efforts in healthcare"),
+(70, False," remembering past tragedies caused by right-wing extremism, assessing current threats, and advocating for collective action against such ideologies"),
+(71, False, "debates ranging from electoral mechanics to ideological positioning and public perception of political figures"),
+(72, False, "active debates concerning the Identitarian Movement's role in politics and society, with a focus on its classification as a right-wing extremist group"),
+(73, False, "30th anniversary Tiananmen Square Massacre and discussions on relations with china"),
+(74, True, "reactions to Brandenburg and Saxony state elections in 2019"),
+(75, False, "discussions on climate policy, climate goals, and the urgency of addressing climate change"),
+(76, False, "casual conversations"),
+(77, False, "statements about Macrons calls for EU reform ahead of EU elections"),
+(78, False, "criticism about fascist tendencies calling on the recent Thuringen election results (1 month prior)"),
+(79, False, "criticism and debates surrounding the actions and statements of CDU politicians and statements about possible alliances in Thuringen"),
+(80, True, "results of presidential elections in Slovakia, seen as a positive development for liberal and pro-European movements across the continent"),
+(81, False, "analysis of public sentiment and political responses to media reports, polls, and surveys on climate change issues"),
+(82, False, "mixed - human rights advocacy based on 25 years of Rwandan genocide, discussion about rights on International Roma Day"),
+(83, False, "discussion about global vaccine development, and making sure that it is available to all, no clear events"),
+(84, False, "Participation of influencers and politicians like Philipp Amthor in discussions regarding youth involvement in politics and future political rights"),
+(85, False, "mix of human rights issues, domestic policy, and recent diplomatic visits by Frank-Walter Steinmeier"),
+(86, False, "legal and policy debates,  related to constitutional interpretations or legislative proposals, no clear goal or proposal"),
+(87, False, "mix of activities, discussions, personal reflections in Düsseldorf and Berlin, involving local leaders, visitors, and community members."),
+(88, False, "general discussions about migration and human rights, internal debates within the AfD"),
+(89, False, "mix of Discussions and engagements by political figures like Jürgen Klein, focusing on regional agendas and party activities and sports achievemts"),
+(90, True, "reaction to sentence of Ojub Titiev, calls for fair trials and international pressure on Russia to uphold human rights"),
+(91, False, "mix of many local events"),
+(92, False, "mix of internal AfD elections and meeting of ministers"),
+(93, False, "discussions on healthcare policy, patient rights, and decision-making processes"),
+(94, False, "70th anniversary of NATO and discussion about Germany's role within the organisation"),
+(95, False," small mixed cluster no specific context or details"),
+(96, False, "support for EU accession talks involving North Macedonia and Albania from Germany"),
+(97, False, "discussion about possible price increase on CO2 emissions"),
+(98, False, "mix of criticism of Minister Andreas Scheuers plan on road toll/tax as well as changes in Die Linke and SPD"),
+(99, False, "criticism of AfD and Die Linke on their stance for criminalization of sea rescue operations (Seenotrettung).")
+]
+
+notes_df = pd.DataFrame(notes, columns=['index', 'label', 'label_comment'])
+sampled_cluster_info['label'] = notes_df['label']
+sampled_cluster_info['label_comment'] = notes_df['label_comment']
+sampled_cluster_info.head(3)
+# key_info = sampled_cluster_info[["date","ctfidf_representation","keybert_representation","global_tfidf_representation","repr_docs"]]
+# index = 2
+# for key,value in key_info.iloc[index].items():
+#     print("Column:",key,", value:", value)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+clusters_with_labels_path = os.path.join(bump_evaluation_path, 'sampled_clusters_with_labels.pkl')
+#sampled_cluster_info.to_pickle(clusters_with_labels_path)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+sampled_cluster_info = pd.read_pickle(clusters_with_labels_path)
+sampled_cluster_info
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Comparing Bump detection events to GPTs events
