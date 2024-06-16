@@ -150,187 +150,366 @@ plt.ylabel('Frequency')
 plt.xticks(range(0, 10, 1))  # Adjust x-axis ticks to show every number
 plt.show()
 
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Sampling 100 clusters - 25:25:50
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import os
-# Count the number of clusters in each category
-high_threshold = 3
-medium_threshold = 1
+# import os
+# # Count the number of clusters in each category
+# high_threshold = 3
+# medium_threshold = 1
 
-high_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] >= high_threshold]
-moderate_event_clusters = cluster_bump_counts[(cluster_bump_counts['num_bumps'] >= medium_threshold)\
-                                              & (cluster_bump_counts['num_bumps'] < high_threshold)]
-low_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] < medium_threshold]
+# high_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] >= high_threshold]
+# moderate_event_clusters = cluster_bump_counts[(cluster_bump_counts['num_bumps'] >= medium_threshold)\
+#                                               & (cluster_bump_counts['num_bumps'] < high_threshold)]
+# low_event_clusters = cluster_bump_counts[cluster_bump_counts['num_bumps'] < medium_threshold]
 
-# Define the sample sizes for each category
-total_sample_size = 100
-high_event_sample_size = max(25, int((len(high_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
-moderate_event_sample_size = max(25, int((len(moderate_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
-low_event_sample_size = total_sample_size - high_event_sample_size - moderate_event_sample_size
+# # Define the sample sizes for each category
+# total_sample_size = 100
+# high_event_sample_size = max(25, int((len(high_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
+# moderate_event_sample_size = max(25, int((len(moderate_event_clusters) / len(cluster_bump_counts)) * total_sample_size))
+# low_event_sample_size = total_sample_size - high_event_sample_size - moderate_event_sample_size
 
-# Randomly sample clusters within each category
-high_event_sample = high_event_clusters.sample(n=high_event_sample_size, random_state=42)
-moderate_event_sample = moderate_event_clusters.sample(n=moderate_event_sample_size, random_state=42)
-low_event_sample = low_event_clusters.sample(n=low_event_sample_size, random_state=42)
+# # Randomly sample clusters within each category
+# high_event_sample = high_event_clusters.sample(n=high_event_sample_size, random_state=42)
+# moderate_event_sample = moderate_event_clusters.sample(n=moderate_event_sample_size, random_state=42)
+# low_event_sample = low_event_clusters.sample(n=low_event_sample_size, random_state=42)
 
-# Combine the samples
-sampled_clusters = pd.concat([high_event_sample, moderate_event_sample, low_event_sample])
+# # Combine the samples
+# sampled_clusters = pd.concat([high_event_sample, moderate_event_sample, low_event_sample])
 
-def assign_category(num_bumps):
-    if num_bumps >= high_threshold:
-        return 'high'
-    elif num_bumps >= medium_threshold:
-        return 'medium'
-    else:
-        return 'low'
+# def assign_category(num_bumps):
+#     if num_bumps >= high_threshold:
+#         return 'high'
+#     elif num_bumps >= medium_threshold:
+#         return 'medium'
+#     else:
+#         return 'low'
 
-# Add cluster category to sampled_clusters
-sampled_clusters['category'] = sampled_clusters['num_bumps'].apply(assign_category)
+# # Add cluster category to sampled_clusters
+# sampled_clusters['category'] = sampled_clusters['num_bumps'].apply(assign_category)
 
-# Merge sampled_clusters with clusters_df to get the full information
-sampled_cluster_info = pd.merge(
-    sampled_clusters,
-    clusters_df,
-    on=['topic_id', 'date'],
-    how='left'
-)
+# # Merge sampled_clusters with clusters_df to get the full information
+# sampled_cluster_info = pd.merge(
+#     sampled_clusters,
+#     clusters_df,
+#     on=['topic_id', 'date'],
+#     how='left'
+# )
 
-# Save the sampled cluster information to a file
-#output_file_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.csv')
-#sampled_cluster_info.to_csv(output_file_path, index=False)
-
-# Verify the sample distribution
-#print("Sampled cluster information saved to:", output_file_path)
-sampled_cluster_info.head(3)
+# sampled_cluster_info.head(3)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # sample_pickle_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.pkl')
 # sampled_cluster_info.to_pickle(sample_pickle_path)
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-sample_pickle_path = os.path.join(bump_evaluation_path, 'sampled_clusters_info_with_categories.pkl')
-sampled_cluster_info =  pd.read_pickle(sample_pickle_path)
-sampled_cluster_info.head(3)
+# Sampled 100 events 
+# First filtered those that were never events (category-low), or were events 1-2 times(category-medium),
+# 3+ times (category-high) - 50:25:25 samples
+ground_truth_path = os.path.join(bump_evaluation_path, 'sampled_clusters_with_labels.pkl')
+ground_truth_df =  pd.read_pickle(ground_truth_path)
+ground_truth_df.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Scores when Bump = Event
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-notes = [
-(0, False, "SPD possibly handing over passwords through legislation, no clear event or reactions"),
-(1, False, "gratitude towards frontline workers during the COVID-19 crisis, particularly around March 20, 2020"),
-(2, True, "75th anniversary of the liberation of Auschwitz"),
-(3, True, "Iranian retaliatory strikes against US military bases, which occurred shortly after the US drone strike that killed Qasem Soleimani"),
-(4, False, "youtuber Rezo goes viral for criticising all german political parties and claiming they are creating a divide"),
-(5, False, "discussion about transition in transport, only recent info is on lack of train drivers"),
-(6, True, "humanitarian crisis in the Mediterranean, particularly concerning the rescue and distribution of migrants and refugees. immediate rescue needs and alleviate pressure on frontline states like Italy and Malta."),
-(7, True, "initiative proposed by Defense Minister Kramp-Karrenbauer regarding the establishment of an international security zone in northern Syria. It reflects efforts to address the humanitarian crisis and stabilize the conflict-ridden region"),
-(8, True, "debates about reform to childrens benefits and general welfare proposed by Minister Franziska Giffey"),
-(9, False, "debates surrounding proposals for expropriation as a solution to the housing affordability crisis"),
-(10, False, "basic disagreements around government expenses between socialist and liberal parties, no clear event"),
-(11, True, "unveiling and public reaction to Germany's climate package in 2019, adopted 10 days later"),
-(12, False, "parliamentary debate surrounding economic policies, specifically concerning the social market economy, VAT fraud, VAT fraud started being discussed in the media at this period, but no convictions until years later"),
-(13, False, "discussion about tax policy, and issues with tax evasion"),
-(14, False, "discussion about antisemitism within the Muslim community"),
-(15, False, "reflects general ongoing policy discussions and advocacy efforts regarding transportation and climate goals"),
-(16, True, "reaction to terrorist attack in Halle synagogue Germany, mentions antisemitism and right-wind extremists"),
-(17, False, "ongoing societal issues and discussions around job security - no clear event"),
-(18, True, "war in northern Syria, proposals for a UN-led security zone and the responses from various European countries"),
-(19, False, "ongoing discussions and debates related to transportation policies, environmental concerns, and political accountability"),
-(20, False, "controversy surrounding plans for deportations to Syria due to concerns and human rights considerations"),
-(21, False, "primarily focus on the political deadlock and controversies surrounding the expansion of renewable energies, particularly wind and solar power"),
-(22, False, "debates within the German political landscape concerning taxation policies"),
-(23, False, "debates regarding the direction and effectiveness of energy policies in achieving climate targets."),
-(24, False, "discussions and legislative efforts in Germany regarding the rise of right-wing extremism and antisemitism"),
-(25, False, "40 years of the green party "),
-(26, False, "discussions about environmental policies, motivated by Wildfires in Australia, but they are not the focus"),
-(27, True, "70th anniversary of the Council of Europe "),
-(28, True, "reaction to recent murder of Walter Lubcke and the general rise of right-wing extremism"),
-(29, False, "mixed cluster, no clear place/event that it is tied to, mentions of earlier (2018) Marches of Pegida/AfD"),
-(30, True, "Christine Lambrecht's speech condemning right-wing extremism and violence in the Bundestag, addressing issues related to the NSU and specific incidents like the murder of Walter Lübcke."),
-(31, True, "the activities and statements of the AfD faction regarding their visit to Syria and the subsequent release of a documentary"),
-(32, True, "70th anniversary of the Council of Europe "),
-(33, True, "rejection of expansion of CO2 reduction strategies in the Bundestag - as part of broader EU emssions scheme"),
-(34, True, "criticism and reactions to Ursula von der Leyen's appointment as Defense Minister despite previous statements about not seeking such positions, reflecting on credibility and political strategies"),
-(35, False, "general discussion about taxation, digitalization, and social issues like poverty and inequality"),
-(36, False, "mixed cluster - random greetings from Hamburg and issues with providing Ventilators during Covid-19"),
-(37, True, "reaction to classification of wirsindmehr protests as left-wing extremism in Saxony on May 16, 2019. ties in to general issues of neo-nazis in eastern germany"),
-(38, False, "debates surrounding tax policies, particularly the push for tax reductions and economic implications"),
-(39, True, "discussion about the types and availabilty of masks during the Covid-19 pandemic"),
-(40, False, "small cluster, various topics such as parliamentary debates (Bundestag), personal opinions and experiences, calls for action regarding issues like Duogynon, and inquiries about political responses"),
-(41, True, "Day of Persons with Disabilities - discussions about the ongoing challenges faced by people with disabilities, efforts to improve access to education, employment, and healthcare, and the importance of raising awareness and societal support"),
-(42, False, "mixed topic - reactions to SPDs proposed changes to Pension policy, accusations of sexism within the party as one of the female members of SPD was ignored"),
-(43, False, "general campaign statements 3 weeks before EU 2019 elections, AfD calls for more independence from Brussels"),
-(44, False, "impact of wage policies on part-time workers, criticisms of current thresholds, and proposals for dynamic adjustments"),
-(45, False, "debates around the fairness of pension schemes, criticisms of proposed policies, and the impact of pension reforms"),
-(46, True, "International Workers Day (May 1st), themes of solidarity, social justice, and European integration"),
-(47, True, "Day against the Use of Child Soldiers (RedHandDay) - focus on raising awareness, advocating against the use of child soldiers in armed conflicts, and calling for global action to address this humanitarian crisis"),
-(48, False, "introduction and debates surrounding the Grundrente policy in Germany, highlighting discussions on fairness"),
-(49, False, "discussion of participation of women in parlament and how to achieve parity, tied in to 100 years of women's suffrage"),
-(50, False, "range of issues within education, consumer rights and general economic matters being discussed as 2019 ends"),
-(51, False, "mentions of Advent activities (Adventssingen) and reflections on historical writings by Dietrich Bonhoeffer, marking 75 years since their creation."),
-(52, False, "internal discussion about reorganization within the SPD"),
-(53, False, "initiatives on icreasing usage of wind energy in 2020"),
-(54, False, "solving legal ambiguities regarding the Gemeinsame Terrorismusabwehrzentrum (GTAZ) as of November 2019."),
-(55, True, "abortion rights -calls for protests on January 26th at Rosa-Luxemburg-Platz in Berlin against Paragraph 219a, highlighting the importance of sexual self-determination"),
-(56, False, "May 8th anniversary (end of WW2), general reflections "),
-(57, True, "escalation of Covid-19 pandemic, border closure, debates over border policies and closures, economic impacts, and efforts to combat misinformation"),
-(58, False, "range of discussions on human rights, historical events like the peaceful revolution in Berlin, legislative actions needed regarding supply chains, and Germany's stance on international human rights issues"),
-(59, False, "range of discussions - establishment of the German Foundation for Engagement and Volunteerism, Franziska Giffey's role as the Minister for Family Affairs"),
-(60, True, "humanitarian crisis in the Mediterranean Sea, focusing on sea rescue operations"),
-(61, False, "discussions around climate change mitigation strategies focusing on tree planting initiatives, forest management reforms"),
-(62, False, "mixed cluster no clear topic, personal annegdotes"),
-(63, False, "reactions to general statements made during the 2020 Munich Security Council"),
-(64, False, "general discussions on human rights, no clear motivation"),
-(65, False, "discussion series denoted as '3K20', where participants or speakers express their views on standing firm with their opinions and goals"),
-(66, False, "initiatives and debates around traffic safety and policy reform, particularly regarding cycling infrastructure and speed limits"),
-(67, False, "general discussions about Covid-19 pandemic, no clear development"),
-(68, False, "discussions about railway issues in hanburg and local events from the AfD"),
-(69, False, "ongoing discussions and activities related to healthcare policy, emergency services, and digitalization efforts in healthcare"),
-(70, False," remembering past tragedies caused by right-wing extremism, assessing current threats, and advocating for collective action against such ideologies"),
-(71, False, "debates ranging from electoral mechanics to ideological positioning and public perception of political figures"),
-(72, False, "active debates concerning the Identitarian Movement's role in politics and society, with a focus on its classification as a right-wing extremist group"),
-(73, False, "30th anniversary Tiananmen Square Massacre and discussions on relations with china"),
-(74, True, "reactions to Brandenburg and Saxony state elections in 2019"),
-(75, False, "discussions on climate policy, climate goals, and the urgency of addressing climate change"),
-(76, False, "casual conversations"),
-(77, False, "statements about Macrons calls for EU reform ahead of EU elections"),
-(78, False, "criticism about fascist tendencies calling on the recent Thuringen election results (1 month prior)"),
-(79, False, "criticism and debates surrounding the actions and statements of CDU politicians and statements about possible alliances in Thuringen"),
-(80, True, "results of presidential elections in Slovakia, seen as a positive development for liberal and pro-European movements across the continent"),
-(81, False, "analysis of public sentiment and political responses to media reports, polls, and surveys on climate change issues"),
-(82, False, "mixed - human rights advocacy based on 25 years of Rwandan genocide, discussion about rights on International Roma Day"),
-(83, False, "discussion about global vaccine development, and making sure that it is available to all, no clear events"),
-(84, False, "Participation of influencers and politicians like Philipp Amthor in discussions regarding youth involvement in politics and future political rights"),
-(85, False, "mix of human rights issues, domestic policy, and recent diplomatic visits by Frank-Walter Steinmeier"),
-(86, False, "legal and policy debates,  related to constitutional interpretations or legislative proposals, no clear goal or proposal"),
-(87, False, "mix of activities, discussions, personal reflections in Düsseldorf and Berlin, involving local leaders, visitors, and community members."),
-(88, False, "general discussions about migration and human rights, internal debates within the AfD"),
-(89, False, "mix of Discussions and engagements by political figures like Jürgen Klein, focusing on regional agendas and party activities and sports achievemts"),
-(90, True, "reaction to sentence of Ojub Titiev, calls for fair trials and international pressure on Russia to uphold human rights"),
-(91, False, "mix of many local events"),
-(92, False, "mix of internal AfD elections and meeting of ministers"),
-(93, False, "discussions on healthcare policy, patient rights, and decision-making processes"),
-(94, False, "70th anniversary of NATO and discussion about Germany's role within the organisation"),
-(95, False," small mixed cluster no specific context or details"),
-(96, False, "support for EU accession talks involving North Macedonia and Albania from Germany"),
-(97, False, "discussion about possible price increase on CO2 emissions"),
-(98, False, "mix of criticism of Minister Andreas Scheuers plan on road toll/tax as well as changes in Die Linke and SPD"),
-(99, False, "criticism of AfD and Die Linke on their stance for criminalization of sea rescue operations (Seenotrettung).")
-]
+import pandas as pd
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-notes_df = pd.DataFrame(notes, columns=['index', 'label', 'label_comment'])
-sampled_cluster_info['label'] = notes_df['label']
-sampled_cluster_info['label_comment'] = notes_df['label_comment']
-sampled_cluster_info.head(3)
-# key_info = sampled_cluster_info[["date","ctfidf_representation","keybert_representation","global_tfidf_representation","repr_docs"]]
-# index = 2
-# for key,value in key_info.iloc[index].items():
-#     print("Column:",key,", value:", value)
+# Assuming bump_df and ground_truth_df are already loaded DataFrames
+
+# Initialize lists to store results
+config_results = []
+
+# Iterate over each unique configuration
+for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
+    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
+    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+    
+    # Compare 'has_bumps' with 'label' to calculate TP, FP, TN, FN
+    y_true = merged_df['label'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
+    y_pred = merged_df['has_bumps'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
+    
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    
+    # Append results to the list
+    config_results.append({
+        'similarity_column': similarity_column,
+        'alpha': alpha,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1
+    })
+
+# Convert results to DataFrame for better visualization
+config_results_df = pd.DataFrame(config_results)
+
+#config_results_df.sort_values(by = ["f1_score"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-clusters_with_labels_path = os.path.join(bump_evaluation_path, 'sampled_clusters_with_labels.pkl')
-#sampled_cluster_info.to_pickle(clusters_with_labels_path)
+# Assuming config_results_df is already created
+# Create a pivot table
+f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+
+# Create a heatmap
+plt.figure(figsize=(10, 8))
+sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
+plt.title('F1-score Heatmap')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Scores when Bump AND Date of topic within bump = Event
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-sampled_cluster_info = pd.read_pickle(clusters_with_labels_path)
-sampled_cluster_info
+import pandas as pd
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+# Assuming bump_df and ground_truth_df are already loaded DataFrames
+
+# Initialize lists to store results
+config_results = []
+
+# Iterate over each unique configuration
+for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
+    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
+    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+    
+    # Initialize a list to store the refined predictions
+    refined_predictions = []
+    
+    for _, row in merged_df.iterrows():
+        if row['has_bumps']:
+            # Check if the date falls within the closest bump start and end dates
+            if row['closest_bump_start_date'] <= row['date'] <= row['closest_bump_end_date']:
+                refined_predictions.append(1)  # Predict as event
+            else:
+                refined_predictions.append(0)  # Predict as non-event
+        else:
+            refined_predictions.append(0)  # Predict as non-event if no bumps
+    
+    # Convert the refined predictions and ground truth labels to integer type
+    y_true = merged_df['label'].astype(int)
+    y_pred = pd.Series(refined_predictions)
+    
+    # Calculate precision, recall, and F1-score
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    
+    # Append results to the list
+    config_results.append({
+        'similarity_column': similarity_column,
+        'alpha': alpha,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1
+    })
+
+# Convert results to DataFrame for better visualization
+config_results_df = pd.DataFrame(config_results)
+
+#config_results_df.sort_values(by = ["f1_score"], ascending = False)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Assuming config_results_df is already created
+# Create a pivot table
+f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+
+# Create a heatmap
+plt.figure(figsize=(10, 8))
+sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
+plt.title('F1-score Heatmap')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Bump and Date is within Max_days of Peak = Bump
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+from sklearn.metrics import precision_score, recall_score, f1_score
+from datetime import timedelta
+
+# Assuming bump_df and ground_truth_df are already loaded DataFrames
+
+# Set the max_days variable
+max_days = 3  # You can set this to any number of days you want
+
+# Initialize lists to store results
+config_results = []
+
+# Iterate over each unique configuration
+for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
+    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
+    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+    
+    # Initialize a list to store the refined predictions
+    refined_predictions = []
+    
+    for _, row in merged_df.iterrows():
+        if row['has_bumps']:
+            # Check if the date is within max_days of the closest bump peak date
+            if abs((row['date'] - row['closest_bump_peak_date']).days) <= max_days:
+                refined_predictions.append(1)  # Predict as event
+            else:
+                refined_predictions.append(0)  # Predict as non-event
+        else:
+            refined_predictions.append(0)  # Predict as non-event if no bumps
+    
+    # Convert the refined predictions and ground truth labels to integer type
+    y_true = merged_df['label'].astype(int)
+    y_pred = pd.Series(refined_predictions)
+    
+    # Calculate precision, recall, and F1-score
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
+    
+    # Append results to the list
+    config_results.append({
+        'similarity_column': similarity_column,
+        'alpha': alpha,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1
+    })
+
+# Convert results to DataFrame for better visualization
+config_results_df = pd.DataFrame(config_results)
+
+#config_results_df.sort_values(by = ["f1_score"], ascending = False)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Assuming config_results_df is already created
+# Create a pivot table
+f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+
+# Create a heatmap
+plt.figure(figsize=(10, 8))
+sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
+plt.title(f'F1-score Heatmap - max_days={max_days}')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# notes = [
+# (0, False, "SPD possibly handing over passwords through legislation, no clear event or reactions"),
+# (1, False, "gratitude towards frontline workers during the COVID-19 crisis, particularly around March 20, 2020"),
+# (2, True, "75th anniversary of the liberation of Auschwitz"),
+# (3, True, "Iranian retaliatory strikes against US military bases, which occurred shortly after the US drone strike that killed Qasem Soleimani"),
+# (4, False, "youtuber Rezo goes viral for criticising all german political parties and claiming they are creating a divide"),
+# (5, False, "discussion about transition in transport, only recent info is on lack of train drivers"),
+# (6, True, "humanitarian crisis in the Mediterranean, particularly concerning the rescue and distribution of migrants and refugees. immediate rescue needs and alleviate pressure on frontline states like Italy and Malta."),
+# (7, True, "initiative proposed by Defense Minister Kramp-Karrenbauer regarding the establishment of an international security zone in northern Syria. It reflects efforts to address the humanitarian crisis and stabilize the conflict-ridden region"),
+# (8, True, "debates about reform to childrens benefits and general welfare proposed by Minister Franziska Giffey"),
+# (9, False, "debates surrounding proposals for expropriation as a solution to the housing affordability crisis"),
+# (10, False, "basic disagreements around government expenses between socialist and liberal parties, no clear event"),
+# (11, True, "unveiling and public reaction to Germany's climate package in 2019, adopted 10 days later"),
+# (12, False, "parliamentary debate surrounding economic policies, specifically concerning the social market economy, VAT fraud, VAT fraud started being discussed in the media at this period, but no convictions until years later"),
+# (13, False, "discussion about tax policy, and issues with tax evasion"),
+# (14, False, "discussion about antisemitism within the Muslim community"),
+# (15, False, "reflects general ongoing policy discussions and advocacy efforts regarding transportation and climate goals"),
+# (16, True, "reaction to terrorist attack in Halle synagogue Germany, mentions antisemitism and right-wind extremists"),
+# (17, False, "ongoing societal issues and discussions around job security - no clear event"),
+# (18, True, "war in northern Syria, proposals for a UN-led security zone and the responses from various European countries"),
+# (19, False, "ongoing discussions and debates related to transportation policies, environmental concerns, and political accountability"),
+# (20, False, "controversy surrounding plans for deportations to Syria due to concerns and human rights considerations"),
+# (21, False, "primarily focus on the political deadlock and controversies surrounding the expansion of renewable energies, particularly wind and solar power"),
+# (22, False, "debates within the German political landscape concerning taxation policies"),
+# (23, False, "debates regarding the direction and effectiveness of energy policies in achieving climate targets."),
+# (24, False, "discussions and legislative efforts in Germany regarding the rise of right-wing extremism and antisemitism"),
+# (25, False, "40 years of the green party "),
+# (26, False, "discussions about environmental policies, motivated by Wildfires in Australia, but they are not the focus"),
+# (27, True, "70th anniversary of the Council of Europe "),
+# (28, True, "reaction to recent murder of Walter Lubcke and the general rise of right-wing extremism"),
+# (29, False, "mixed cluster, no clear place/event that it is tied to, mentions of earlier (2018) Marches of Pegida/AfD"),
+# (30, True, "Christine Lambrecht's speech condemning right-wing extremism and violence in the Bundestag, addressing issues related to the NSU and specific incidents like the murder of Walter Lübcke."),
+# (31, True, "the activities and statements of the AfD faction regarding their visit to Syria and the subsequent release of a documentary"),
+# (32, True, "70th anniversary of the Council of Europe "),
+# (33, True, "rejection of expansion of CO2 reduction strategies in the Bundestag - as part of broader EU emssions scheme"),
+# (34, True, "criticism and reactions to Ursula von der Leyen's appointment as Defense Minister despite previous statements about not seeking such positions, reflecting on credibility and political strategies"),
+# (35, False, "general discussion about taxation, digitalization, and social issues like poverty and inequality"),
+# (36, False, "mixed cluster - random greetings from Hamburg and issues with providing Ventilators during Covid-19"),
+# (37, True, "reaction to classification of wirsindmehr protests as left-wing extremism in Saxony on May 16, 2019. ties in to general issues of neo-nazis in eastern germany"),
+# (38, False, "debates surrounding tax policies, particularly the push for tax reductions and economic implications"),
+# (39, True, "discussion about the types and availabilty of masks during the Covid-19 pandemic"),
+# (40, False, "small cluster, various topics such as parliamentary debates (Bundestag), personal opinions and experiences, calls for action regarding issues like Duogynon, and inquiries about political responses"),
+# (41, True, "Day of Persons with Disabilities - discussions about the ongoing challenges faced by people with disabilities, efforts to improve access to education, employment, and healthcare, and the importance of raising awareness and societal support"),
+# (42, False, "mixed topic - reactions to SPDs proposed changes to Pension policy, accusations of sexism within the party as one of the female members of SPD was ignored"),
+# (43, False, "general campaign statements 3 weeks before EU 2019 elections, AfD calls for more independence from Brussels"),
+# (44, False, "impact of wage policies on part-time workers, criticisms of current thresholds, and proposals for dynamic adjustments"),
+# (45, False, "debates around the fairness of pension schemes, criticisms of proposed policies, and the impact of pension reforms"),
+# (46, True, "International Workers Day (May 1st), themes of solidarity, social justice, and European integration"),
+# (47, True, "Day against the Use of Child Soldiers (RedHandDay) - focus on raising awareness, advocating against the use of child soldiers in armed conflicts, and calling for global action to address this humanitarian crisis"),
+# (48, False, "introduction and debates surrounding the Grundrente policy in Germany, highlighting discussions on fairness"),
+# (49, False, "discussion of participation of women in parlament and how to achieve parity, tied in to 100 years of women's suffrage"),
+# (50, False, "range of issues within education, consumer rights and general economic matters being discussed as 2019 ends"),
+# (51, False, "mentions of Advent activities (Adventssingen) and reflections on historical writings by Dietrich Bonhoeffer, marking 75 years since their creation."),
+# (52, False, "internal discussion about reorganization within the SPD"),
+# (53, False, "initiatives on icreasing usage of wind energy in 2020"),
+# (54, False, "solving legal ambiguities regarding the Gemeinsame Terrorismusabwehrzentrum (GTAZ) as of November 2019."),
+# (55, True, "abortion rights -calls for protests on January 26th at Rosa-Luxemburg-Platz in Berlin against Paragraph 219a, highlighting the importance of sexual self-determination"),
+# (56, False, "May 8th anniversary (end of WW2), general reflections "),
+# (57, True, "escalation of Covid-19 pandemic, border closure, debates over border policies and closures, economic impacts, and efforts to combat misinformation"),
+# (58, False, "range of discussions on human rights, historical events like the peaceful revolution in Berlin, legislative actions needed regarding supply chains, and Germany's stance on international human rights issues"),
+# (59, False, "range of discussions - establishment of the German Foundation for Engagement and Volunteerism, Franziska Giffey's role as the Minister for Family Affairs"),
+# (60, True, "humanitarian crisis in the Mediterranean Sea, focusing on sea rescue operations"),
+# (61, False, "discussions around climate change mitigation strategies focusing on tree planting initiatives, forest management reforms"),
+# (62, False, "mixed cluster no clear topic, personal annegdotes"),
+# (63, False, "reactions to general statements made during the 2020 Munich Security Council"),
+# (64, False, "general discussions on human rights, no clear motivation"),
+# (65, False, "discussion series denoted as '3K20', where participants or speakers express their views on standing firm with their opinions and goals"),
+# (66, False, "initiatives and debates around traffic safety and policy reform, particularly regarding cycling infrastructure and speed limits"),
+# (67, False, "general discussions about Covid-19 pandemic, no clear development"),
+# (68, False, "discussions about railway issues in hanburg and local events from the AfD"),
+# (69, False, "ongoing discussions and activities related to healthcare policy, emergency services, and digitalization efforts in healthcare"),
+# (70, False," remembering past tragedies caused by right-wing extremism, assessing current threats, and advocating for collective action against such ideologies"),
+# (71, False, "debates ranging from electoral mechanics to ideological positioning and public perception of political figures"),
+# (72, False, "active debates concerning the Identitarian Movement's role in politics and society, with a focus on its classification as a right-wing extremist group"),
+# (73, False, "30th anniversary Tiananmen Square Massacre and discussions on relations with china"),
+# (74, True, "reactions to Brandenburg and Saxony state elections in 2019"),
+# (75, False, "discussions on climate policy, climate goals, and the urgency of addressing climate change"),
+# (76, False, "casual conversations"),
+# (77, False, "statements about Macrons calls for EU reform ahead of EU elections"),
+# (78, False, "criticism about fascist tendencies calling on the recent Thuringen election results (1 month prior)"),
+# (79, False, "criticism and debates surrounding the actions and statements of CDU politicians and statements about possible alliances in Thuringen"),
+# (80, True, "results of presidential elections in Slovakia, seen as a positive development for liberal and pro-European movements across the continent"),
+# (81, False, "analysis of public sentiment and political responses to media reports, polls, and surveys on climate change issues"),
+# (82, False, "mixed - human rights advocacy based on 25 years of Rwandan genocide, discussion about rights on International Roma Day"),
+# (83, False, "discussion about global vaccine development, and making sure that it is available to all, no clear events"),
+# (84, False, "Participation of influencers and politicians like Philipp Amthor in discussions regarding youth involvement in politics and future political rights"),
+# (85, False, "mix of human rights issues, domestic policy, and recent diplomatic visits by Frank-Walter Steinmeier"),
+# (86, False, "legal and policy debates,  related to constitutional interpretations or legislative proposals, no clear goal or proposal"),
+# (87, False, "mix of activities, discussions, personal reflections in Düsseldorf and Berlin, involving local leaders, visitors, and community members."),
+# (88, False, "general discussions about migration and human rights, internal debates within the AfD"),
+# (89, False, "mix of Discussions and engagements by political figures like Jürgen Klein, focusing on regional agendas and party activities and sports achievemts"),
+# (90, True, "reaction to sentence of Ojub Titiev, calls for fair trials and international pressure on Russia to uphold human rights"),
+# (91, False, "mix of many local events"),
+# (92, False, "mix of internal AfD elections and meeting of ministers"),
+# (93, False, "discussions on healthcare policy, patient rights, and decision-making processes"),
+# (94, False, "70th anniversary of NATO and discussion about Germany's role within the organisation"),
+# (95, False," small mixed cluster no specific context or details"),
+# (96, False, "support for EU accession talks involving North Macedonia and Albania from Germany"),
+# (97, False, "discussion about possible price increase on CO2 emissions"),
+# (98, False, "mix of criticism of Minister Andreas Scheuers plan on road toll/tax as well as changes in Die Linke and SPD"),
+# (99, False, "criticism of AfD and Die Linke on their stance for criminalization of sea rescue operations (Seenotrettung).")
+# ]
+
+# notes_df = pd.DataFrame(notes, columns=['index', 'label', 'label_comment'])
+# sampled_cluster_info['label'] = notes_df['label']
+# sampled_cluster_info['label_comment'] = notes_df['label_comment']
+# sampled_cluster_info.head(3)
+# # key_info = sampled_cluster_info[["date","ctfidf_representation","keybert_representation","global_tfidf_representation","repr_docs"]]
+# # index = 2
+# # for key,value in key_info.iloc[index].items():
+# #     print("Column:",key,", value:", value)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Comparing Bump detection events to GPTs events
