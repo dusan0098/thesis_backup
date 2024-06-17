@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import random
 import datetime
+from sklearn.metrics import precision_score, accuracy_score, f1_score, recall_score
+import os
 from utils import (
     select_gpu_with_most_free_memory,
     load_experiment_jsons,
@@ -60,7 +62,7 @@ bump_evaluation_path = bump_evaluation.get_path()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 print("Number of key ground truth events: ",len(key_events_df))
-key_events_df.head(1)
+#key_events_df.head(1)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 experiment_jsons = load_experiment_jsons(
@@ -102,7 +104,7 @@ max_delta_days = 3
 
 # Create a condition to filter rows - has no bump or has bump close by
 condition = (bump_df['has_bumps']==False) \
-            | (abs((bump_df['closest_bump_peak_date'] - bump_df['date']).apply(lambda x: x.days)) <= max_delta_days) 
+| (abs((bump_df['closest_bump_peak_date'] - bump_df['date']).apply(lambda x: x.days)) <= max_delta_days) 
 
 # Filter the DataFrame based on the condition
 close_bumps_df = bump_df[condition]
@@ -206,17 +208,206 @@ plt.show()
 # Sampled 100 events 
 # First filtered those that were never events (category-low), or were events 1-2 times(category-medium),
 # 3+ times (category-high) - 50:25:25 samples
-ground_truth_path = os.path.join(bump_evaluation_path, 'sampled_clusters_with_labels.pkl')
-ground_truth_df =  pd.read_pickle(ground_truth_path)
-ground_truth_df.head(3)
+# ground_truth_path = os.path.join(bump_evaluation_path, 'sampled_clusters_with_labels.pkl')
+# ground_truth_df =  pd.read_pickle(ground_truth_path)
+# ground_truth_df.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Extracting GPT labels for Ground Truth Events
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import openai
+# from openai_utils import handle_rate_limit_error, handle_json_format_error
+# # OpenAI configuration
+# openai.api_key = "a796cd0d45604c42b9738d7900c11861"
+# openai.api_base = "https://topic-representation-long.openai.azure.com/"
+# openai.api_type = "azure"
+# openai.api_version = '2023-05-15'
+# deployment_name = 'ChatGPT-Long'
+
+# openai_config = {
+#     "max_tokens": 8000,
+#     "temperature": 0.2,
+#     "top_p": 0.2
+# }
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# system_message = {
+#     "role": "system",
+#     "content": "You are a helpful assistant. Your primary task is to determine whether the provided cluster of tweets, \
+#     extracted from German politicians' Twitter accounts, represents an important event or a regular (everyday) conversation.\
+#     The analysis should consider the features and representative documents (tweets) provided for a specific period. \
+#     If the content represents an important event, the event should be tied to something exclusive to the period and \
+#     not a topic that would be discussed by the politicians on a regular basis. The response should always be in English.\
+#     Based on the analysis, please provide a response in a structured JSON format with the following fields: \
+#     - 'is_event': Boolean (True if the cluster represents an event, False otherwise) \
+#     - 'event_name': A short title for the event (in English, use German words only if necessary) \
+#     - 'event_description': A brief explanation of the event in 1-2 sentences (in English, focusing on who, what, where, when, and why) \
+#     If the content does not represent an event, set 'is_event' to False and provide default values for 'event_name' and 'event_description'."
+# }
+
+# def create_prompt(row):
+#     date = row['date']
+#     ctfidf_representation = ', '.join(row['ctfidf_representation'])
+#     keybert_representation = ', '.join(row['keybert_representation'])
+#     representative_docs = '\n'.join(row['repr_docs'])
+
+#     event_examples = """
+#     An event should be something significant that had a notable effect, reaction, controversy, or discourse. Here are examples of what should be considered an event:
+#     - A controversial law that sparked significant debate or protests
+#     - Fights or significant altercations in the parliament
+#     - Changes in leadership within the parliament or political parties
+#     - Wars or military actions
+#     - Natural disasters
+#     - Large protests or public demonstrations
+#     - Major scandals or political controversies
+
+#     Conversely, a regular conversation should include routine activities or discussions that do not lead to significant reactions or impact. For example:
+#     - Routine readings of laws that were expected and had no significant impact
+#     - Standard political meetings without notable outcomes
+#     - General discussions about ongoing policies without new developments
+#     """
+
+#     prompt = f"""
+#     I am providing you with the representative features and documents of a cluster extracted from tweets posted by \
+#     German politicians. The cluster was created using tweets scraped from their official Twitter accounts, and the\
+#     content includes both German and English languages. The day on which these tweets were posted is on {date}.
+
+#     Please analyze the provided features and representative documents to determine whether the content represents\
+#     a regular (everyday) conversation or an important event being discussed. An event should be tied to something \
+#     exclusive to that day and not a topic that would be discussed by the politicians on a regular basis. The event title \
+#     should precisely capture what is happening on that day and why these tweets were posted. \
+#     Here are the details:
+
+#     ### Date:
+#     - Date: {date}
+
+#     ### Representative Features:
+#     - C-TF-IDF Representation: {ctfidf_representation}
+#     - KeyBERT Representation: {keybert_representation}
+
+#     ### Representative Documents (Tweets):
+#     {representative_docs}
+
+#     {event_examples}
+
+#     Based on this information, is the cluster discussing a regular conversation or an important event? \
+#     Please provide your reasoning in the following JSON format:
+
+#     {{
+#         "is_event": true or false,
+#         "event_name": "string",
+#         "event_description": "string"
+#     }}.
+
+#     If you determine that the cluster corresponds to an event (is_event is true), please fill out all of the fields with \
+#     the following details:
+#     - "is_event": true
+#     - "event_name": A short title for the event (in English, use German words only if necessary)
+#     - "event_description": An explanation of the event with key details. \
+#     (in English, focusing on conveying - who, what, where, when, and why. Ensure that the event description explains \
+#     the core reason and consequences of the event happening on that day.) If the event is part of a larger ongoing event\
+#     you can also provide this context through an additional sentence, after covering the daily event.
+
+#     If you determine that the cluster does not correspond to an event (is_event is false), please fill out the fields with:
+#     - "is_event": false
+#     - "event_name": ""
+#     - "event_description": ""
+#     """
+#     return prompt
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# def process_row(row):
+#     current_prompt = create_prompt(row)
+#     messages = [system_message, {"role": "user", "content": current_prompt}]
+
+#     max_attempts = 3  # Maximum attempts to get correct JSON
+#     for attempt in range(max_attempts):
+#         try:
+#             response = openai.ChatCompletion.create(
+#                 engine=deployment_name,
+#                 messages=messages,
+#                 **openai_config
+#             )
+#             content = response['choices'][0]['message']['content']
+#             result = json.loads(content)
+#             return result
+#         except openai.error.InvalidRequestError as e:
+#             if "maximum context length" in str(e):
+#                 print(f"Context too long in attempt {attempt + 1}.")
+#             else:
+#                 print(f"Attempt {attempt + 1} failed. Error: {str(e)}")
+#                 break  # Exit the loop for invalid request errors
+#         except json.decoder.JSONDecodeError as e:
+#             result = handle_json_format_error(
+#                 current_messages=messages,
+#                 deployment_name=deployment_name,
+#                 response=response,
+#                 error_message=e,
+#                 max_attempts=max_attempts
+#             )
+#             return result
+#         except openai.error.RateLimitError as e:
+#             print(f"RateLimitError in attempt {attempt + 1}")
+#             if attempt < max_attempts - 1:
+#                 error_message = str(e)
+#                 handle_rate_limit_error(error_message)
+#             else:
+#                 print("Maximum retry attempts reached.")
+#         except Exception as e:
+#             print(f"Error in attempt {attempt + 1}: {str(e)}")
+#             if attempt == max_attempts - 1:
+#                 handle_rate_limit_error(str(e))
+#             else:
+#                 time.sleep(5)  # Wait for 5 seconds before retrying
+#     return {"is_event": False, "event_name": "", "event_description": ""}
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import json
+# ground_truth_df['gpt_is_event'] = False
+# ground_truth_df['gpt_event_name'] = ""
+# ground_truth_df['gpt_event_description'] = ""
+
+# for idx, row in tqdm(ground_truth_df.iterrows(), desc="Processing topic clusters"):
+#     result = process_row(row)
+#     ground_truth_df.at[idx, 'gpt_is_event'] = result.get('is_event', False)
+#     if result['is_event']:
+#         print("\nEvent name: ", result.get('event_name', "")) 
+#         print("\nEvent description: ", result.get('event_description', ""))
+#         ground_truth_df.at[idx, 'gpt_event_name'] = result.get('event_name', "")
+#         ground_truth_df.at[idx, 'gpt_event_description'] = result.get('event_description', "")
+#     else:
+#         print('\n not an event, full response: \n', result)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+ground_truth_with_gpt_path = os.path.join(bump_evaluation_path, 'ground_truth_with_gpt_labels.pkl')
+#ground_truth_df.to_pickle(ground_truth_with_gpt_path)
+
+ground_truth_df = pd.read_pickle(ground_truth_with_gpt_path)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Extract the true labels and the GPT predictions from ground_truth_df
+true_labels = ground_truth_df['label']
+gpt_predictions = ground_truth_df['gpt_is_event']
+
+# Calculate precision
+precision = precision_score(true_labels, gpt_predictions)
+
+# Calculate accuracy
+recall = recall_score(true_labels, gpt_predictions)
+
+# Calculate F1 score
+f1 = f1_score(true_labels, gpt_predictions)
+
+# Print the results
+print(f"Precision: {precision:.2f}")
+print(f"Recall: {recall:.2f}")
+print(f"F1 Score: {f1:.2f}")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Scores when Bump = Event
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import pandas as pd
-from sklearn.metrics import precision_score, recall_score, f1_score
-
 # Assuming bump_df and ground_truth_df are already loaded DataFrames
 
 # Initialize lists to store results
@@ -247,7 +438,7 @@ for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_col
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
 
-#config_results_df.sort_values(by = ["f1_score"], ascending = False)
+config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
@@ -313,7 +504,7 @@ for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_col
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
 
-#config_results_df.sort_values(by = ["f1_score"], ascending = False)
+config_results_df.sort_values(by = ["f1_score"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
@@ -339,7 +530,7 @@ from datetime import timedelta
 # Assuming bump_df and ground_truth_df are already loaded DataFrames
 
 # Set the max_days variable
-max_days = 3  # You can set this to any number of days you want
+max_days = 10  # You can set this to any number of days you want
 
 # Initialize lists to store results
 config_results = []
@@ -383,7 +574,7 @@ for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_col
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
 
-#config_results_df.sort_values(by = ["f1_score"], ascending = False)
+config_results_df.sort_values(by = ["f1_score"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
@@ -602,8 +793,7 @@ for _, config in tqdm(configurations.iterrows(), desc="Processing configurations
         
         # Temporal filtering: daily events within the same week as the GPT event
         same_week_candidates = filtered_candidates[
-            (filtered_candidates['date'] >= gpt_event['start_date']) &
-            (filtered_candidates['date'] <= gpt_event['end_date'])
+            (filtered_candidates['date'] >= gpt_event['start_date']) & (filtered_candidates['date'] <= gpt_event['end_date'])
         ]
 
         for _, candidate in same_week_candidates.iterrows():
@@ -828,8 +1018,7 @@ visualize_distributions(event_candidates_df)
 # ### VISUALISING TIME SERIES WITH BUMPS
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date =  datetime.date(2019,1,1),\
-                    max_date= datetime.date(2020,4,24)):
+def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date=datetime.date(2019,1,1), max_date=datetime.date(2020,4,24)):
     # Extract the global start and end dates from the DataFrame
     global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
     global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
@@ -838,10 +1027,10 @@ def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date =  datetime.d
     timeline = pd.date_range(start=global_start_date, end=global_end_date)
     
     #
-    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column)\
-                          &(bump_df["alpha"] == alpha) \
-                          &(bump_df["date"] >=min_date)\
-                         &(bump_df["date"] <=max_date)]
+    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column) 
+                          &(bump_df["alpha"] == alpha) 
+                          &(bump_df["date"] >=min_date) 
+                          &(bump_df["date"] <=max_date)]
     
     # Sample N random clusters
     sampled_clusters = filtered_df.sample(n=N, replace=False)
@@ -887,8 +1076,9 @@ def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date =  datetime.d
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Now you can easily filter and analyze the DataFrame based on the new metrics
 max_delta_days = 15
-filtered_bump_df = event_candidates_df[(event_candidates_df['percentage_below_lower'] >= 75) \
-                                       & (event_candidates_df['variance_factor'] <= 5) \
+ #(event_candidates_df['percentage_below_lower'] >= 75) \
+filtered_bump_df = event_candidates_df[(event_candidates_df['percentage_below_lower'] >= 50)
+                                       & (event_candidates_df['variance_factor'] <= 5) 
                                       & (event_candidates_df['closest_peak_day_distance'] <= max_delta_days)] 
 print(f"Filtered DataFrame has {len(filtered_bump_df)} rows out of {len(event_candidates_df)} total rows.")
 
@@ -909,8 +1099,9 @@ bump_counts.sort_values(by="count")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 visualize_bumps(bump_df = filtered_bump_df,
-                N=5, 
-                sim_column = "max_sim_global_tfidf_representation_weighted_list", 
-                alpha = 0.03,
-                min_date =  datetime.date(2020,2,1),
-                max_date =  datetime.date(2020,4,24))
+                N=3, 
+                sim_column = "max_sim_keybert_representation_sentence_list", 
+                alpha = 0.05,
+                min_date =  datetime.date(2019,10,1),
+                max_date =  datetime.date(2019,11,1),
+               )
