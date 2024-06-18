@@ -92,6 +92,8 @@ for curr_json in filtered_jsons:
     bump_df  = load_experiment_objects(experiment_jsons = [curr_json],
                             file_path_key = "bump_save_location")[0]
     
+    original_bump_columns = bump_df.columns
+    
     bump_df = bump_df.merge(clusters_df, on=["topic_id","date"])
     event_candidates_df = bump_df[bump_df["has_bumps"]]
 
@@ -133,7 +135,7 @@ similarity_bump_counts['num_similarity_columns_with_bumps'] = similarity_bump_co
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 #cluster_bump_counts.sort_values(by = "num_bumps", ascending = False)
 #similarity_bump_counts.sort_values(by = "num_similarity_columns_with_bumps", ascending = False)
-
+sns.set(style="whitegrid")
 # Plotting Histogram and Density for Config Counts
 plt.figure(figsize=(12, 6))
 sns.histplot(cluster_bump_counts['num_bumps'], kde=False, bins=range(0, 34))
@@ -405,6 +407,202 @@ print(f"Recall: {recall:.2f}")
 print(f"F1 Score: {f1:.2f}")
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Extracting results for different configurations - Upper/Lower threshold
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # bump_results_70_30 = bump_df[original_bump_columns]
+# df_wide = bump_df[["topic_id","date","similarity_column","alpha", "smoothed_values"]]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # FUNCTIONS FOR BUMP DETECTION
+# # Step 1: Label each point as rise or fall
+# def label_rise_fall(smoothed_values):
+#     labels = ["-"]
+#     for i in range(1, len(smoothed_values)):
+#         if smoothed_values[i] > smoothed_values[i - 1]:
+#             labels.append("R")
+#         elif smoothed_values[i] < smoothed_values[i - 1]:
+#             labels.append("F")
+#         else:
+#             labels.append(labels[-1])  # In case of equal values, keep the previous state
+#     return labels
+
+# # Step 2: Identify bumps
+# def identify_bumps(labels, smoothed_values, timeline):
+#     bumps = []
+#     in_rise = False
+#     bump_start = None
+#     bump_peak = None
+#     bump_end = None
+
+#     for i in range(1, len(labels)):
+#         if labels[i] == "R" and not in_rise:
+#             in_rise = True
+#             bump_start = i - 1
+#         elif labels[i] == "F" and in_rise:
+#             bump_peak = i - 1
+#             in_rise = False
+
+#             # Check for the end of the bump
+#             if bump_start is not None and bump_peak is not None:
+#                 j = i
+#                 while j < len(labels) and labels[j] == "F":
+#                     j += 1
+#                 bump_end = j - 1
+
+#                 # Record the bump
+#                 bumps.append({
+#                     'start_date': timeline[bump_start].date(),
+#                     'end_date': timeline[bump_end].date(),
+#                     'peak_date': timeline[bump_peak].date(),
+#                     'peak_value': smoothed_values[bump_peak],
+#                     'start_index': bump_start,
+#                     'peak_index': bump_peak,
+#                     'end_index': bump_end
+#                 })
+
+#                 bump_start = None
+#                 bump_peak = None
+#                 bump_end = None
+
+#     return bumps
+
+# def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_threshold, min_days_above_upper=7, max_bump_width=45):
+#     # Execute the steps
+#     labels = label_rise_fall(smoothed_values)
+#     bumps = identify_bumps(labels, smoothed_values, timeline)
+    
+#     filtered_bumps = []
+#     for bump in bumps:
+#         # Check if start and end are below lower threshold
+#         if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
+#             # Check if peak is above upper threshold
+#             if bump['peak_value'] > upper_threshold:
+#                 # Calculate bump width as the time spent above the lower threshold
+#                 bump_rise_start = next((i for i in range(bump['start_index'], bump['peak_index'] + 1) if smoothed_values[i] > lower_threshold), bump['start_index'])
+#                 bump_fall_end = next((i for i in range(bump['peak_index'] + 1, bump['end_index'] + 1) if smoothed_values[i] < lower_threshold), bump['end_index'])
+                
+#                 bump_width = (timeline[bump_fall_end].date() - timeline[bump_rise_start].date()).days
+#                 if bump_width <= max_bump_width:
+#                     # Check number of days above upper threshold
+#                     days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
+#                     if days_above_upper >= min_days_above_upper:
+#                         bump['days_above_lower'] = bump_width
+#                         bump['days_above_upper'] = days_above_upper
+#                         # Find the first date above upper threshold
+#                         bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
+#                         filtered_bumps.append(bump)
+#     return filtered_bumps
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# def calculate_quantiles_from_smoothed(smoothed_values, quantiles):
+#     all_smoothed_values = np.concatenate(smoothed_values.values)
+#     lower_threshold = np.percentile(all_smoothed_values, quantiles[0] * 100)
+#     upper_threshold = np.percentile(all_smoothed_values, quantiles[1] * 100)
+#     assert lower_threshold < upper_threshold
+#     print(lower_threshold,upper_threshold)
+#     return lower_threshold, upper_threshold
+
+# def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 0.7), min_days_above_upper=5, max_bump_width=45):
+#     bump_records = []
+    
+#     global_start_date = df_wide['date'].min()
+#     global_end_date = df_wide['date'].max()
+#     timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+#     start_time = time.time()
+
+#     for col in tqdm(timeline_columns, desc="Processing columns"):
+#         for alpha in tqdm(alpha_values, desc="Processing alphas"):
+#             current_df = df_wide[(df_wide["similarity_column"]==col) &((df_wide["alpha"]==alpha))]
+#             smoothed_values = current_df["smoothed_values"]
+#             lower_threshold, upper_threshold = calculate_quantiles_from_smoothed(smoothed_values, quantiles)
+
+#             for idx, row in current_df.iterrows():
+#                 smoothed_row_values = smoothed_values[idx]
+#                 bumps = detect_bumps_in_series(smoothed_values = smoothed_row_values, 
+#                                                timeline = timeline,
+#                                                lower_threshold = lower_threshold,
+#                                                upper_threshold =upper_threshold,
+#                                                min_days_above_upper =min_days_above_upper,
+#                                                max_bump_width = max_bump_width)
+#                 has_bumps = len(bumps) > 0
+#                 closest_bump_peak_date = None
+#                 closest_bump_peak_value = None
+#                 closest_bump_start_date = None
+#                 closest_bump_end_date = None
+#                 closest_bump_width = None
+#                 closest_bump_time_above_upper = None
+#                 closest_bump_time_above_lower = None
+                
+#                 total_bumps = len(bumps)
+#                 largest_bump_peak_date = None
+#                 largest_bump_peak_value = None
+
+#                 if has_bumps:                    
+#                     closest_bump = min(bumps, key=lambda x: abs(x['peak_date'] - row['date']))
+#                     closest_bump_peak_date = closest_bump['peak_date']
+#                     closest_bump_peak_value = closest_bump['peak_value']
+#                     closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
+#                     closest_bump_time_above_upper = closest_bump['days_above_upper']
+#                     closest_bump_time_above_lower = closest_bump['days_above_lower']
+#                     closest_bump_start_date = closest_bump['start_date']
+#                     closest_bump_end_date = closest_bump['end_date']
+                    
+#                     largest_bump = max(bumps, key=lambda x: x['peak_value'])
+#                     largest_bump_peak_date = largest_bump['peak_date']
+#                     largest_bump_peak_value = largest_bump['peak_value']
+
+#                 bump_records.append({
+#                     'topic_id': row['topic_id'],
+#                     'date': row['date'],
+                    
+#                     'similarity_column': col,
+#                     'alpha': alpha,
+                    
+#                     'smoothed_values': smoothed_row_values,
+#                     'lower_threshold':lower_threshold,
+#                     'upper_threshold':upper_threshold,
+#                     'has_bumps': has_bumps,
+#                     'total_bumps': total_bumps,
+                    
+#                     'closest_bump_peak_date': closest_bump_peak_date,
+#                     'closest_bump_peak_value': closest_bump_peak_value,
+#                     'closest_bump_start_date': closest_bump_start_date,
+#                     'closest_bump_end_date': closest_bump_end_date,
+#                     'closest_bump_width': closest_bump_width,
+#                     'closest_bump_time_above_lower': closest_bump_time_above_lower,
+#                     'closest_bump_time_above_upper': closest_bump_time_above_upper,
+                    
+#                     'largest_bump_peak_date': largest_bump_peak_date,
+#                     'largest_bump_peak_value': largest_bump_peak_value
+#                 })
+                
+#     end_time = time.time()  
+#     time_taken_minutes = (end_time - start_time) / 60 
+
+#     bump_df = pd.DataFrame(bump_records)
+#     return bump_df, time_taken_minutes
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# timeline_columns = df_wide['similarity_column'].unique()
+# alpha_values = df_wide['alpha'].unique()
+# quantiles_list = [(0.35, 0.70)]
+# min_days_above_upper = 1 #5, 1-3-7 best (1,20)
+# max_bump_width = 20 #45, 20-30-60
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import time
+
+# for quantiles in quantiles_list:
+#     bump_df, time_taken = detect_bumps_in_df(df_wide, 
+#                                  timeline_columns = timeline_columns, 
+#                                  alpha_values = alpha_values, 
+#                                  quantiles = quantiles, 
+#                                  min_days_above_upper = min_days_above_upper, 
+#                                  max_bump_width = max_bump_width)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Scores when Bump = Event
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
@@ -442,8 +640,12 @@ config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
-# Create a pivot table
+# Ensure the similarity_column is sorted alphabetically
+sorted_similarity_columns = sorted(config_results_df['similarity_column'].unique())
+
+# Create a pivot table with sorted similarity_column
 f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
 
 # Create a heatmap
 plt.figure(figsize=(10, 8))
@@ -510,6 +712,7 @@ config_results_df.sort_values(by = ["f1_score"], ascending = False)
 # Assuming config_results_df is already created
 # Create a pivot table
 f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
 
 # Create a heatmap
 plt.figure(figsize=(10, 8))
@@ -580,6 +783,7 @@ config_results_df.sort_values(by = ["f1_score"], ascending = False)
 # Assuming config_results_df is already created
 # Create a pivot table
 f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
+f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
 
 # Create a heatmap
 plt.figure(figsize=(10, 8))
