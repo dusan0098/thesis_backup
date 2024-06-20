@@ -410,98 +410,98 @@ print(f"F1 Score: {f1:.2f}")
 # ### Extracting results for different configurations - Upper/Lower threshold
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# # bump_results_70_30 = bump_df[original_bump_columns]
-# df_wide = bump_df[["topic_id","date","similarity_column","alpha", "smoothed_values"]]
+# FUNCTIONS FOR BUMP DETECTION
+# Step 1: Label each point as rise or fall
+def label_rise_fall(smoothed_values):
+    labels = ["-"]
+    for i in range(1, len(smoothed_values)):
+        if smoothed_values[i] > smoothed_values[i - 1]:
+            labels.append("R")
+        elif smoothed_values[i] < smoothed_values[i - 1]:
+            labels.append("F")
+        else:
+            labels.append(labels[-1])  # In case of equal values, keep the previous state
+    return labels
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# # FUNCTIONS FOR BUMP DETECTION
-# # Step 1: Label each point as rise or fall
-# def label_rise_fall(smoothed_values):
-#     labels = ["-"]
-#     for i in range(1, len(smoothed_values)):
-#         if smoothed_values[i] > smoothed_values[i - 1]:
-#             labels.append("R")
-#         elif smoothed_values[i] < smoothed_values[i - 1]:
-#             labels.append("F")
-#         else:
-#             labels.append(labels[-1])  # In case of equal values, keep the previous state
-#     return labels
+# Step 2: Identify bumps
+def identify_bumps(labels, smoothed_values, timeline):
+    bumps = []
+    in_rise = False
+    bump_start = None
+    bump_peak = None
+    bump_end = None
 
-# # Step 2: Identify bumps
-# def identify_bumps(labels, smoothed_values, timeline):
-#     bumps = []
-#     in_rise = False
-#     bump_start = None
-#     bump_peak = None
-#     bump_end = None
+    for i in range(1, len(labels)):
+        if labels[i] == "R" and not in_rise:
+            in_rise = True
+            bump_start = i - 1
+        elif labels[i] == "F" and in_rise:
+            bump_peak = i - 1
+            in_rise = False
 
-#     for i in range(1, len(labels)):
-#         if labels[i] == "R" and not in_rise:
-#             in_rise = True
-#             bump_start = i - 1
-#         elif labels[i] == "F" and in_rise:
-#             bump_peak = i - 1
-#             in_rise = False
+            # Check for the end of the bump
+            if bump_start is not None and bump_peak is not None:
+                j = i
+                while j < len(labels) and labels[j] == "F":
+                    j += 1
+                bump_end = j - 1
 
-#             # Check for the end of the bump
-#             if bump_start is not None and bump_peak is not None:
-#                 j = i
-#                 while j < len(labels) and labels[j] == "F":
-#                     j += 1
-#                 bump_end = j - 1
+                # Record the bump
+                bumps.append({
+                    'start_date': timeline[bump_start].date(),
+                    'end_date': timeline[bump_end].date(),
+                    'peak_date': timeline[bump_peak].date(),
+                    'peak_value': smoothed_values[bump_peak],
+                    'start_index': bump_start,
+                    'peak_index': bump_peak,
+                    'end_index': bump_end
+                })
 
-#                 # Record the bump
-#                 bumps.append({
-#                     'start_date': timeline[bump_start].date(),
-#                     'end_date': timeline[bump_end].date(),
-#                     'peak_date': timeline[bump_peak].date(),
-#                     'peak_value': smoothed_values[bump_peak],
-#                     'start_index': bump_start,
-#                     'peak_index': bump_peak,
-#                     'end_index': bump_end
-#                 })
+                bump_start = None
+                bump_peak = None
+                bump_end = None
 
-#                 bump_start = None
-#                 bump_peak = None
-#                 bump_end = None
+    return bumps
 
-#     return bumps
-
-# def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_threshold, min_days_above_upper=7, max_bump_width=45):
-#     # Execute the steps
-#     labels = label_rise_fall(smoothed_values)
-#     bumps = identify_bumps(labels, smoothed_values, timeline)
+def detect_bumps_in_series(smoothed_values, timeline, lower_threshold, upper_threshold, min_days_above_upper=7, max_bump_width=45):
+    # Execute the steps
+    labels = label_rise_fall(smoothed_values)
+    bumps = identify_bumps(labels, smoothed_values, timeline)
     
-#     filtered_bumps = []
-#     for bump in bumps:
-#         # Check if start and end are below lower threshold
-#         if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
-#             # Check if peak is above upper threshold
-#             if bump['peak_value'] > upper_threshold:
-#                 # Calculate bump width as the time spent above the lower threshold
-#                 bump_rise_start = next((i for i in range(bump['start_index'], bump['peak_index'] + 1) if smoothed_values[i] > lower_threshold), bump['start_index'])
-#                 bump_fall_end = next((i for i in range(bump['peak_index'] + 1, bump['end_index'] + 1) if smoothed_values[i] < lower_threshold), bump['end_index'])
+    filtered_bumps = []
+    for bump in bumps:
+        # Check if start and end are below lower threshold
+        if smoothed_values[bump['start_index']] < lower_threshold and smoothed_values[bump['end_index']] < lower_threshold:
+            # Check if peak is above upper threshold
+            if bump['peak_value'] > upper_threshold:
+                # Calculate bump width as the time spent above the lower threshold
+                bump_rise_start = next((i for i in range(bump['start_index'], bump['peak_index'] + 1) if smoothed_values[i] > lower_threshold), bump['start_index'])
+                bump_fall_end = next((i for i in range(bump['peak_index'] + 1, bump['end_index'] + 1) if smoothed_values[i] < lower_threshold), bump['end_index'])
                 
-#                 bump_width = (timeline[bump_fall_end].date() - timeline[bump_rise_start].date()).days
-#                 if bump_width <= max_bump_width:
-#                     # Check number of days above upper threshold
-#                     days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
-#                     if days_above_upper >= min_days_above_upper:
-#                         bump['days_above_lower'] = bump_width
-#                         bump['days_above_upper'] = days_above_upper
-#                         # Find the first date above upper threshold
-#                         bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
-#                         filtered_bumps.append(bump)
-#     return filtered_bumps
+                bump_width = (timeline[bump_fall_end].date() - timeline[bump_rise_start].date()).days
+                if bump_width <= max_bump_width:
+                    # Check number of days above upper threshold
+                    days_above_upper = sum(1 for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold)
+                    if days_above_upper >= min_days_above_upper:
+                        bump['days_above_lower'] = bump_width
+                        bump['days_above_upper'] = days_above_upper
+                        # Find the first date above upper threshold
+                        bump['first_above_upper_date'] = next((timeline[i].date() for i in range(bump['start_index'], bump['end_index'] + 1) if smoothed_values[i] > upper_threshold), None)
+                        filtered_bumps.append(bump)
+    return filtered_bumps
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# def calculate_quantiles_from_smoothed(smoothed_values, quantiles):
-#     all_smoothed_values = np.concatenate(smoothed_values.values)
-#     lower_threshold = np.percentile(all_smoothed_values, quantiles[0] * 100)
-#     upper_threshold = np.percentile(all_smoothed_values, quantiles[1] * 100)
-#     assert lower_threshold < upper_threshold
-#     print(lower_threshold,upper_threshold)
-#     return lower_threshold, upper_threshold
+from joblib import Parallel, delayed
+import itertools
+from tqdm import tqdm
+
+def calculate_quantiles_from_smoothed(smoothed_values, quantiles):
+    all_smoothed_values = np.concatenate(smoothed_values.values)
+    lower_threshold = np.percentile(all_smoothed_values, quantiles[0] * 100)
+    upper_threshold = np.percentile(all_smoothed_values, quantiles[1] * 100)
+    assert lower_threshold < upper_threshold
+    return lower_threshold, upper_threshold
+
 
 # def detect_bumps_in_df(df_wide, timeline_columns, alpha_values, quantiles=(0.3, 0.7), min_days_above_upper=5, max_bump_width=45):
 #     bump_records = []
@@ -584,59 +584,315 @@ print(f"F1 Score: {f1:.2f}")
 #     bump_df = pd.DataFrame(bump_records)
 #     return bump_df, time_taken_minutes
 
+
+# def detect_bumps_in_df_optimized(df_wide, timeline_columns, alpha_values, quantiles_list, min_days_above_upper_values, max_bump_width_values):
+#     bump_results_dict = {}
+    
+#     global_start_date = df_wide['date'].min()
+#     global_end_date = df_wide['date'].max()
+#     timeline = pd.date_range(start=global_start_date, end=global_end_date)
+
+#     start_time = time.time()
+
+#     # Precompute filtered DataFrames and quantiles for each combination of similarity_column and alpha
+#     precomputed_dfs = {}
+#     quantile_thresholds = {}
+
+#     for col in timeline_columns:
+#         for alpha in alpha_values:
+#             current_df = df_wide[(df_wide["similarity_column"] == col) & (df_wide["alpha"] == alpha)]
+#             smoothed_values = current_df["smoothed_values"]
+#             precomputed_dfs[(col, alpha)] = current_df
+
+#             for quantiles in quantiles_list:
+#                 lower_threshold, upper_threshold = calculate_quantiles_from_smoothed(smoothed_values, quantiles)
+#                 quantile_thresholds[(col, alpha, quantiles)] = lower_threshold, upper_threshold
+
+#     # Loop over all combinations of the parameters
+#     for quantiles, min_days_above_upper, max_bump_width in tqdm(itertools.product(quantiles_list, min_days_above_upper_values, max_bump_width_values), desc="Processing all combinations"):
+#         for col in timeline_columns:
+#             for alpha in alpha_values:
+#                 current_df = precomputed_dfs[(col, alpha)]
+#                 smoothed_values = current_df["smoothed_values"]
+#                 lower_threshold, upper_threshold = quantile_thresholds[(col, alpha, quantiles)]
+
+#                 bump_records = []
+
+#                 for idx, row in current_df.iterrows():
+#                     smoothed_row_values = smoothed_values[idx]
+#                     bumps = detect_bumps_in_series(smoothed_values=smoothed_row_values, 
+#                                                    timeline=timeline,
+#                                                    lower_threshold=lower_threshold,
+#                                                    upper_threshold=upper_threshold,
+#                                                    min_days_above_upper=min_days_above_upper,
+#                                                    max_bump_width=max_bump_width)
+
+#                     has_bumps = len(bumps) > 0
+#                     closest_bump_peak_date = None
+#                     closest_bump_peak_value = None
+#                     closest_bump_start_date = None
+#                     closest_bump_end_date = None
+#                     closest_bump_width = None
+#                     closest_bump_time_above_upper = None
+#                     closest_bump_time_above_lower = None
+#                     total_bumps = len(bumps)
+#                     largest_bump_peak_date = None
+#                     largest_bump_peak_value = None
+
+#                     if has_bumps:                    
+#                         closest_bump = min(bumps, key=lambda x: abs(x['peak_date'] - row['date']))
+#                         closest_bump_peak_date = closest_bump['peak_date']
+#                         closest_bump_peak_value = closest_bump['peak_value']
+#                         closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
+#                         closest_bump_time_above_upper = closest_bump['days_above_upper']
+#                         closest_bump_time_above_lower = closest_bump['days_above_lower']
+#                         closest_bump_start_date = closest_bump['start_date']
+#                         closest_bump_end_date = closest_bump['end_date']
+                        
+#                         largest_bump = max(bumps, key=lambda x: x['peak_value'])
+#                         largest_bump_peak_date = largest_bump['peak_date']
+#                         largest_bump_peak_value = largest_bump['peak_value']
+
+#                     bump_records.append({
+#                         'topic_id': row['topic_id'],
+#                         'date': row['date'],
+                        
+#                         'similarity_column': col,
+#                         'alpha': alpha,
+                        
+#                         'quantiles': quantiles,
+#                         'min_days_above_upper': min_days_above_upper,
+#                         'max_bump_width': max_bump_width,
+                        
+#                         'smoothed_values': smoothed_row_values,
+#                         'lower_threshold': lower_threshold,
+#                         'upper_threshold': upper_threshold,
+#                         'has_bumps': has_bumps,
+#                         'total_bumps': total_bumps,
+                        
+#                         'closest_bump_peak_date': closest_bump_peak_date,
+#                         'closest_bump_peak_value': closest_bump_peak_value,
+#                         'closest_bump_start_date': closest_bump_start_date,
+#                         'closest_bump_end_date': closest_bump_end_date,
+#                         'closest_bump_width': closest_bump_width,
+#                         'closest_bump_time_above_lower': closest_bump_time_above_lower,
+#                         'closest_bump_time_above_upper': closest_bump_time_above_upper,
+                        
+#                         'largest_bump_peak_date': largest_bump_peak_date,
+#                         'largest_bump_peak_value': largest_bump_peak_value
+#                     })
+
+#                 bump_df = pd.DataFrame(bump_records)
+#                 bump_results_dict[(quantiles, min_days_above_upper, max_bump_width, col, alpha)] = bump_df
+
+#     end_time = time.time()  
+#     time_taken_minutes = (end_time - start_time) / 60 
+
+#     return bump_results_dict, time_taken_minutes
+
+
+def detect_bumps_in_series_parallel(row, smoothed_row_values, timeline, lower_threshold, upper_threshold, min_days_above_upper, max_bump_width):
+    bumps = detect_bumps_in_series(smoothed_values=smoothed_row_values, 
+                                   timeline=timeline,
+                                   lower_threshold=lower_threshold,
+                                   upper_threshold=upper_threshold,
+                                   min_days_above_upper=min_days_above_upper,
+                                   max_bump_width=max_bump_width)
+
+    has_bumps = len(bumps) > 0
+    closest_bump_peak_date = None
+    closest_bump_peak_value = None
+    closest_bump_start_date = None
+    closest_bump_end_date = None
+    closest_bump_width = None
+    closest_bump_time_above_upper = None
+    closest_bump_time_above_lower = None
+    total_bumps = len(bumps)
+    largest_bump_peak_date = None
+    largest_bump_peak_value = None
+
+    if has_bumps:                    
+        closest_bump = min(bumps, key=lambda x: abs(x['peak_date'] - row['date']))
+        closest_bump_peak_date = closest_bump['peak_date']
+        closest_bump_peak_value = closest_bump['peak_value']
+        closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
+        closest_bump_time_above_upper = closest_bump['days_above_upper']
+        closest_bump_time_above_lower = closest_bump['days_above_lower']
+        closest_bump_start_date = closest_bump['start_date']
+        closest_bump_end_date = closest_bump['end_date']
+        
+        largest_bump = max(bumps, key=lambda x: x['peak_value'])
+        largest_bump_peak_date = largest_bump['peak_date']
+        largest_bump_peak_value = largest_bump['peak_value']
+
+    return {
+        'topic_id': row['topic_id'],
+        'date': row['date'],
+        
+#         'smoothed_values': smoothed_row_values,
+        'lower_threshold': lower_threshold,
+        'upper_threshold': upper_threshold,
+        'has_bumps': has_bumps,
+        'total_bumps': total_bumps,
+        
+        'closest_bump_peak_date': closest_bump_peak_date,
+        'closest_bump_peak_value': closest_bump_peak_value,
+        'closest_bump_start_date': closest_bump_start_date,
+        'closest_bump_end_date': closest_bump_end_date,
+        'closest_bump_width': closest_bump_width,
+        'closest_bump_time_above_lower': closest_bump_time_above_lower,
+        'closest_bump_time_above_upper': closest_bump_time_above_upper,
+        
+        'largest_bump_peak_date': largest_bump_peak_date,
+        'largest_bump_peak_value': largest_bump_peak_value
+    }
+
+def detect_bumps_in_df_optimized(df_wide, timeline_columns, alpha_values, quantiles_list, min_days_above_upper_values, max_bump_width_values, n_jobs=-1):
+    bump_results_dict = {}
+    
+    global_start_date = df_wide['date'].min()
+    global_end_date = df_wide['date'].max()
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+
+    start_time = time.time()
+
+    # Precompute filtered DataFrames and quantiles for each combination of similarity_column and alpha
+    precomputed_dfs = {}
+    quantile_thresholds = {}
+
+    for col in timeline_columns:
+        for alpha in alpha_values:
+            current_df = df_wide[(df_wide["similarity_column"] == col) & (df_wide["alpha"] == alpha)]
+            smoothed_values = current_df["smoothed_values"]
+            precomputed_dfs[(col, alpha)] = current_df
+
+            for quantiles in quantiles_list:
+                lower_threshold, upper_threshold = calculate_quantiles_from_smoothed(smoothed_values, quantiles)
+                quantile_thresholds[(col, alpha, quantiles)] = lower_threshold, upper_threshold
+
+    # Loop over all combinations of the parameters
+    for quantiles, min_days_above_upper, max_bump_width in tqdm(itertools.product(quantiles_list, min_days_above_upper_values, max_bump_width_values), desc="Processing all combinations"):
+        for col in tqdm(timeline_columns, desc="Processing columns", leave=False):
+            for alpha in tqdm(alpha_values, desc="Processing alphas", leave=False):
+                current_df = precomputed_dfs[(col, alpha)]
+                smoothed_values = current_df["smoothed_values"]
+                lower_threshold, upper_threshold = quantile_thresholds[(col, alpha, quantiles)]
+
+                bump_records = Parallel(n_jobs=n_jobs)(delayed(detect_bumps_in_series_parallel)(
+                    row, 
+                    smoothed_values[idx], 
+                    timeline, 
+                    lower_threshold, 
+                    upper_threshold, 
+                    min_days_above_upper, 
+                    max_bump_width
+                ) for idx, row in current_df.iterrows())
+
+                bump_df = pd.DataFrame(bump_records)
+                bump_results_dict[(quantiles, min_days_above_upper, max_bump_width, col, alpha)] = bump_df
+
+    end_time = time.time()  
+    time_taken_minutes = (end_time - start_time) / 60 
+
+    return bump_results_dict, time_taken_minutes
+
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# bump_results_70_30 = bump_df[original_bump_columns]
+df_wide = bump_df[["topic_id","date","similarity_column","alpha", "smoothed_values"]]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# import time
+# import itertools
+
 # timeline_columns = df_wide['similarity_column'].unique()
 # alpha_values = df_wide['alpha'].unique()
-# quantiles_list = [(0.35, 0.70)]
-# min_days_above_upper = 1 #5, 1-3-7 best (1,20)
-# max_bump_width = 20 #45, 20-30-60
+
+# # Define parameter values
+# quantiles_list = [(0.3, 0.7), (0.35, 0.65), (0.4,0.6)] # default (0.3,07)
+# min_days_above_upper_values = [1, 3, 5] # default 5
+# max_bump_width_values = [10, 20, 45]# default 45
+
+
+
+# IF RERUNING FOR EVALUATION MAKE SURE TO FILTER DF_WIDE TO ONLY PROCESS THE GROUND TRUTH ROWS
+# bump_results_dict, time_taken = detect_bumps_in_df_optimized(df_wide, 
+#                                                              timeline_columns, 
+#                                                              alpha_values, 
+#                                                              quantiles_list, 
+#                                                              min_days_above_upper_values, 
+#                                                              max_bump_width_values)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import time
+# import pickle
+# bump_detection_results_path = os.path.join(bump_evaluation_path, 'bump_results_dict.pkl')
 
-# for quantiles in quantiles_list:
-#     bump_df, time_taken = detect_bumps_in_df(df_wide, 
-#                                  timeline_columns = timeline_columns, 
-#                                  alpha_values = alpha_values, 
-#                                  quantiles = quantiles, 
-#                                  min_days_above_upper = min_days_above_upper, 
-#                                  max_bump_width = max_bump_width)
+# with open(bump_detection_results_path, 'wb') as handle:
+#     pickle.dump(bump_results_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+with open(bump_detection_results_path, 'rb') as handle:
+    bump_results_dict = pickle.load(handle)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Initialize an empty dictionary to store the combined DataFrames
+combined_bump_results_dict = {}
+
+# Iterate over the bump_results_dict
+for key, df in bump_results_dict.items():
+    quantiles, min_days_above_upper, max_bump_width, similarity_column, alpha = key
+    # Check if the combination of quantiles, min_days_above_upper, max_bump_width is already in the dictionary
+    combined_key = (quantiles, min_days_above_upper, max_bump_width)
+    if combined_key not in combined_bump_results_dict:
+        combined_bump_results_dict[combined_key] = []
+
+    # Append the DataFrame to the list corresponding to the combined key
+    df_copy = df.copy()
+    df_copy['similarity_column'] = similarity_column
+    df_copy['alpha'] = alpha
+    combined_bump_results_dict[combined_key].append(df_copy)
+
+# Concatenate the DataFrames within each combined key
+for combined_key in combined_bump_results_dict:
+    combined_bump_results_dict[combined_key] = pd.concat(combined_bump_results_dict[combined_key], ignore_index=True)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
 # ### Scores when Bump = Event
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Assuming bump_df and ground_truth_df are already loaded DataFrames
-
 # Initialize lists to store results
 config_results = []
 
 # Iterate over each unique configuration
-for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
-    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
-    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
-    
-    # Compare 'has_bumps' with 'label' to calculate TP, FP, TN, FN
-    y_true = merged_df['label'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
-    y_pred = merged_df['has_bumps'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
-    
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    
-    # Append results to the list
-    config_results.append({
-        'similarity_column': similarity_column,
-        'alpha': alpha,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1
-    })
+for combined_key, combined_df in combined_bump_results_dict.items():
+    quantiles, min_days_above_upper, max_bump_width = combined_key
+    for (similarity_column, alpha), config_group in combined_df.groupby(['similarity_column', 'alpha']):
+        # Merge combined_bump_df with ground_truth_df on 'topic_id' and 'date'
+        merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+
+        # Compare 'has_bumps' with 'label' to calculate TP, FP, TN, FN
+        y_true = merged_df['label'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
+        y_pred = merged_df['has_bumps'].astype(int)  # Convert boolean to int (1 for True, 0 for False)
+
+        precision = precision_score(y_true, y_pred)
+        recall = recall_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+
+        # Append results to the list
+        config_results.append({
+            'quantiles': quantiles,
+            'min_days_above_upper': min_days_above_upper,
+            'max_bump_width': max_bump_width,
+            'similarity_column': similarity_column,
+            'alpha': alpha,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1
+        })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
 
-config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
+config_results_df.sort_values(by=["f1_score", "recall"], ascending=False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
@@ -662,51 +918,56 @@ plt.show()
 import pandas as pd
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-# Assuming bump_df and ground_truth_df are already loaded DataFrames
+# Assuming ground_truth_df is already loaded DataFrames
 
 # Initialize lists to store results
 config_results = []
 
 # Iterate over each unique configuration
-for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
-    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
-    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
-    
-    # Initialize a list to store the refined predictions
-    refined_predictions = []
-    
-    for _, row in merged_df.iterrows():
-        if row['has_bumps']:
-            # Check if the date falls within the closest bump start and end dates
-            if row['closest_bump_start_date'] <= row['date'] <= row['closest_bump_end_date']:
-                refined_predictions.append(1)  # Predict as event
+for combined_key, combined_df in combined_bump_results_dict.items():
+    quantiles, min_days_above_upper, max_bump_width = combined_key
+    for (similarity_column, alpha), config_group in combined_df.groupby(['similarity_column', 'alpha']):
+        # Merge combined_bump_df with ground_truth_df on 'topic_id' and 'date'
+        merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+        
+        # Initialize a list to store the refined predictions
+        refined_predictions = []
+        
+        for _, row in merged_df.iterrows():
+            if row['has_bumps']:
+                # Check if the date falls within the closest bump start and end dates
+                if row['closest_bump_start_date'] <= row['date'] <= row['closest_bump_end_date']:
+                    refined_predictions.append(1)  # Predict as event
+                else:
+                    refined_predictions.append(0)  # Predict as non-event
             else:
-                refined_predictions.append(0)  # Predict as non-event
-        else:
-            refined_predictions.append(0)  # Predict as non-event if no bumps
-    
-    # Convert the refined predictions and ground truth labels to integer type
-    y_true = merged_df['label'].astype(int)
-    y_pred = pd.Series(refined_predictions)
-    
-    # Calculate precision, recall, and F1-score
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    
-    # Append results to the list
-    config_results.append({
-        'similarity_column': similarity_column,
-        'alpha': alpha,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1
-    })
+                refined_predictions.append(0)  # Predict as non-event if no bumps
+        
+        # Convert the refined predictions and ground truth labels to integer type
+        y_true = merged_df['label'].astype(int)
+        y_pred = pd.Series(refined_predictions)
+        
+        # Calculate precision, recall, and F1-score
+        precision = precision_score(y_true, y_pred)
+        recall = recall_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+        
+        # Append results to the list
+        config_results.append({
+            'quantiles': quantiles,
+            'min_days_above_upper': min_days_above_upper,
+            'max_bump_width': max_bump_width,
+            'similarity_column': similarity_column,
+            'alpha': alpha,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1
+        })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
 
-config_results_df.sort_values(by = ["f1_score"], ascending = False)
+config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Assuming config_results_df is already created
@@ -730,7 +991,7 @@ import pandas as pd
 from sklearn.metrics import precision_score, recall_score, f1_score
 from datetime import timedelta
 
-# Assuming bump_df and ground_truth_df are already loaded DataFrames
+# Assuming ground_truth_df is already loaded
 
 # Set the max_days variable
 max_days = 10  # You can set this to any number of days you want
@@ -739,40 +1000,45 @@ max_days = 10  # You can set this to any number of days you want
 config_results = []
 
 # Iterate over each unique configuration
-for (similarity_column, alpha), config_group in bump_df.groupby(['similarity_column', 'alpha']):
-    # Merge bump_df with ground_truth_df on 'topic_id' and 'date'
-    merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
-    
-    # Initialize a list to store the refined predictions
-    refined_predictions = []
-    
-    for _, row in merged_df.iterrows():
-        if row['has_bumps']:
-            # Check if the date is within max_days of the closest bump peak date
-            if abs((row['date'] - row['closest_bump_peak_date']).days) <= max_days:
-                refined_predictions.append(1)  # Predict as event
+for combined_key, combined_df in combined_bump_results_dict.items():
+    quantiles, min_days_above_upper, max_bump_width = combined_key
+    for (similarity_column, alpha), config_group in combined_df.groupby(['similarity_column', 'alpha']):
+        # Merge combined_bump_df with ground_truth_df on 'topic_id' and 'date'
+        merged_df = pd.merge(config_group, ground_truth_df, on=['topic_id', 'date'], how='inner', suffixes=('_bump', '_ground_truth'))
+        
+        # Initialize a list to store the refined predictions
+        refined_predictions = []
+        
+        for _, row in merged_df.iterrows():
+            if row['has_bumps']:
+                # Check if the date is within max_days of the closest bump peak date
+                if abs((row['date'] - row['closest_bump_peak_date']).days) <= max_days:
+                    refined_predictions.append(1)  # Predict as event
+                else:
+                    refined_predictions.append(0)  # Predict as non-event
             else:
-                refined_predictions.append(0)  # Predict as non-event
-        else:
-            refined_predictions.append(0)  # Predict as non-event if no bumps
-    
-    # Convert the refined predictions and ground truth labels to integer type
-    y_true = merged_df['label'].astype(int)
-    y_pred = pd.Series(refined_predictions)
-    
-    # Calculate precision, recall, and F1-score
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    
-    # Append results to the list
-    config_results.append({
-        'similarity_column': similarity_column,
-        'alpha': alpha,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1
-    })
+                refined_predictions.append(0)  # Predict as non-event if no bumps
+        
+        # Convert the refined predictions and ground truth labels to integer type
+        y_true = merged_df['label'].astype(int)
+        y_pred = pd.Series(refined_predictions)
+        
+        # Calculate precision, recall, and F1-score
+        precision = precision_score(y_true, y_pred)
+        recall = recall_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+        
+        # Append results to the list
+        config_results.append({
+            'quantiles': quantiles,
+            'min_days_above_upper': min_days_above_upper,
+            'max_bump_width': max_bump_width,
+            'similarity_column': similarity_column,
+            'alpha': alpha,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1
+        })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
