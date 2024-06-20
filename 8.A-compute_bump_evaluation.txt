@@ -585,112 +585,6 @@ def calculate_quantiles_from_smoothed(smoothed_values, quantiles):
 #     return bump_df, time_taken_minutes
 
 
-# def detect_bumps_in_df_optimized(df_wide, timeline_columns, alpha_values, quantiles_list, min_days_above_upper_values, max_bump_width_values):
-#     bump_results_dict = {}
-    
-#     global_start_date = df_wide['date'].min()
-#     global_end_date = df_wide['date'].max()
-#     timeline = pd.date_range(start=global_start_date, end=global_end_date)
-
-#     start_time = time.time()
-
-#     # Precompute filtered DataFrames and quantiles for each combination of similarity_column and alpha
-#     precomputed_dfs = {}
-#     quantile_thresholds = {}
-
-#     for col in timeline_columns:
-#         for alpha in alpha_values:
-#             current_df = df_wide[(df_wide["similarity_column"] == col) & (df_wide["alpha"] == alpha)]
-#             smoothed_values = current_df["smoothed_values"]
-#             precomputed_dfs[(col, alpha)] = current_df
-
-#             for quantiles in quantiles_list:
-#                 lower_threshold, upper_threshold = calculate_quantiles_from_smoothed(smoothed_values, quantiles)
-#                 quantile_thresholds[(col, alpha, quantiles)] = lower_threshold, upper_threshold
-
-#     # Loop over all combinations of the parameters
-#     for quantiles, min_days_above_upper, max_bump_width in tqdm(itertools.product(quantiles_list, min_days_above_upper_values, max_bump_width_values), desc="Processing all combinations"):
-#         for col in timeline_columns:
-#             for alpha in alpha_values:
-#                 current_df = precomputed_dfs[(col, alpha)]
-#                 smoothed_values = current_df["smoothed_values"]
-#                 lower_threshold, upper_threshold = quantile_thresholds[(col, alpha, quantiles)]
-
-#                 bump_records = []
-
-#                 for idx, row in current_df.iterrows():
-#                     smoothed_row_values = smoothed_values[idx]
-#                     bumps = detect_bumps_in_series(smoothed_values=smoothed_row_values, 
-#                                                    timeline=timeline,
-#                                                    lower_threshold=lower_threshold,
-#                                                    upper_threshold=upper_threshold,
-#                                                    min_days_above_upper=min_days_above_upper,
-#                                                    max_bump_width=max_bump_width)
-
-#                     has_bumps = len(bumps) > 0
-#                     closest_bump_peak_date = None
-#                     closest_bump_peak_value = None
-#                     closest_bump_start_date = None
-#                     closest_bump_end_date = None
-#                     closest_bump_width = None
-#                     closest_bump_time_above_upper = None
-#                     closest_bump_time_above_lower = None
-#                     total_bumps = len(bumps)
-#                     largest_bump_peak_date = None
-#                     largest_bump_peak_value = None
-
-#                     if has_bumps:                    
-#                         closest_bump = min(bumps, key=lambda x: abs(x['peak_date'] - row['date']))
-#                         closest_bump_peak_date = closest_bump['peak_date']
-#                         closest_bump_peak_value = closest_bump['peak_value']
-#                         closest_bump_width = (closest_bump['end_date'] - closest_bump['start_date']).days
-#                         closest_bump_time_above_upper = closest_bump['days_above_upper']
-#                         closest_bump_time_above_lower = closest_bump['days_above_lower']
-#                         closest_bump_start_date = closest_bump['start_date']
-#                         closest_bump_end_date = closest_bump['end_date']
-                        
-#                         largest_bump = max(bumps, key=lambda x: x['peak_value'])
-#                         largest_bump_peak_date = largest_bump['peak_date']
-#                         largest_bump_peak_value = largest_bump['peak_value']
-
-#                     bump_records.append({
-#                         'topic_id': row['topic_id'],
-#                         'date': row['date'],
-                        
-#                         'similarity_column': col,
-#                         'alpha': alpha,
-                        
-#                         'quantiles': quantiles,
-#                         'min_days_above_upper': min_days_above_upper,
-#                         'max_bump_width': max_bump_width,
-                        
-#                         'smoothed_values': smoothed_row_values,
-#                         'lower_threshold': lower_threshold,
-#                         'upper_threshold': upper_threshold,
-#                         'has_bumps': has_bumps,
-#                         'total_bumps': total_bumps,
-                        
-#                         'closest_bump_peak_date': closest_bump_peak_date,
-#                         'closest_bump_peak_value': closest_bump_peak_value,
-#                         'closest_bump_start_date': closest_bump_start_date,
-#                         'closest_bump_end_date': closest_bump_end_date,
-#                         'closest_bump_width': closest_bump_width,
-#                         'closest_bump_time_above_lower': closest_bump_time_above_lower,
-#                         'closest_bump_time_above_upper': closest_bump_time_above_upper,
-                        
-#                         'largest_bump_peak_date': largest_bump_peak_date,
-#                         'largest_bump_peak_value': largest_bump_peak_value
-#                     })
-
-#                 bump_df = pd.DataFrame(bump_records)
-#                 bump_results_dict[(quantiles, min_days_above_upper, max_bump_width, col, alpha)] = bump_df
-
-#     end_time = time.time()  
-#     time_taken_minutes = (end_time - start_time) / 60 
-
-#     return bump_results_dict, time_taken_minutes
-
-
 def detect_bumps_in_series_parallel(row, smoothed_row_values, timeline, lower_threshold, upper_threshold, min_days_above_upper, max_bump_width):
     bumps = detect_bumps_in_series(smoothed_values=smoothed_row_values, 
                                    timeline=timeline,
@@ -903,6 +797,7 @@ config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 
 
 # Identify the top 3 configurations with the highest maximum F1-scores
 top_3_configs = config_max_f1.nlargest(3, 'f1_score')
+print(top_3_configs)
 
 # Create a figure to hold the heatmaps
 fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
@@ -1004,6 +899,7 @@ config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 
 
 # Identify the top 3 configurations with the highest maximum F1-scores
 top_3_configs = config_max_f1.nlargest(3, 'f1_score')
+print(top_3_configs)
 
 # Create a figure to hold the heatmaps
 fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
@@ -1109,7 +1005,7 @@ config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 
 
 # Identify the top 3 configurations with the highest maximum F1-scores
 top_3_configs = config_max_f1.nlargest(3, 'f1_score')
-
+print(top_3_configs)
 # Create a figure to hold the heatmaps
 fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
 
@@ -1142,6 +1038,351 @@ for i, (index, config) in enumerate(top_3_configs.iterrows()):
 
 plt.tight_layout()
 plt.show()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Visualisations for best configs
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# # Bump = Event, (0.35, 0.65), 1, 20 - sim column - max_sim_ctfidf_representation_sentence_list, 0.04 
+# # Precision, recall, F1 = 0.425532, 0.769231, 0.547945
+# best_config = {
+#     'quantiles': (0.35, 0.65),
+#     'min_days_above_upper': 1,
+#     'max_bump_width': 20,
+#     'similarity_column':"max_sim_ctfidf_representation_sentence_list",
+#     'alpha': 0.04,
+# }
+
+# # Bump contains date = Event, 0.4, 0.6, 1 ,20 - sim_column - max_sim_ctfidf_representation_sentence_list, 0.03
+# # Precision, recall, F1 = 0.578947, 0.423077, 0.488889
+# best_config = {
+#     'quantiles': (0.4, 0.6),
+#     'min_days_above_upper': 1,
+#     'max_bump_width': 20,
+#     'similarity_column':"max_sim_ctfidf_representation_sentence_list",
+#     'alpha': 0.03,
+# }
+
+
+# Peak close to date = Event, (0.4, 0.6), 1, 20 - sim_column - max_sim_ctfidf_representation_sentence_list, 0.03
+# Precision, recall, F1 = 0.600000, 0.461538, 0.521739
+# USE THIS TO RECREATE BEST RESULTS 
+best_config = {
+    'quantiles': (0.4, 0.6),
+    'min_days_above_upper': 1,
+    'max_bump_width': 20,
+    'similarity_column':"max_sim_ctfidf_representation_sentence_list",
+    'alpha': 0.03,
+}
+
+
+# TEMPORARY SOLUTION PUT WHATEVER YOU WANT HERE
+best_config = {
+    'quantiles': (0.4, 0.6),
+    'min_days_above_upper': 1,
+    'max_bump_width': 45,
+    'similarity_column':"max_sim_global_tfidf_representation_weighted_list",
+    'alpha': 0.03,
+}
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+best_config_df = combined_bump_results_dict[(best_config['quantiles'], best_config['min_days_above_upper'], best_config['max_bump_width'])]
+best_config_df = best_config_df[(best_config_df['similarity_column']==best_config['similarity_column'])\
+                                &(best_config_df['alpha'] ==best_config['alpha'])]
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+bump_df_smooth_values = bump_df[['topic_id', 'date', 'similarity_column','alpha','smoothed_values']]
+best_config_df = pd.merge(best_config_df, bump_df_smooth_values, on=['topic_id', 'date', 'similarity_column','alpha'], how='inner', suffixes=('_bump', '_ground_truth'))
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+best_config_df = best_config_df.merge(clusters_df, on=["topic_id","date"])
+best_config_df.head(3)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pandas as pd
+
+def add_compliance_metrics(bump_df):
+    # Define a function to calculate the compliance metrics along with day distances
+    def calculate_metrics(row):
+        lower_threshold = row['lower_threshold']
+        upper_threshold = row['upper_threshold']
+        smoothed_values = row['smoothed_values']
+
+        # Calculate the percentage of values below the lower threshold
+        below_threshold_count = sum(value <= lower_threshold for value in smoothed_values)
+        percentage_below_lower = (below_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the percentage of values strictly between the lower and upper thresholds
+        between_threshold_count = sum(lower_threshold < value < upper_threshold for value in smoothed_values)
+        percentage_between_thresholds = (between_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the percentage of values above the upper threshold
+        above_threshold_count = sum(value > upper_threshold for value in smoothed_values)
+        percentage_above_upper = (above_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the min-max variance factor
+        max_value = max(smoothed_values)
+        min_value = min(smoothed_values)
+        variance = max_value - min_value
+        threshold_difference = upper_threshold - lower_threshold
+        variance_factor = variance / threshold_difference if threshold_difference != 0 else float('inf')  # Prevent division by zero
+
+        # Check if there are bumps and calculate day distances for closest and largest bump peaks
+        if row['has_bumps']:
+            closest_peak_day_distance = abs((row['closest_bump_peak_date'] - row['date']).days)
+            largest_peak_day_distance = abs((row['largest_bump_peak_date'] - row['date']).days)
+        else:
+            closest_peak_day_distance = None  # Placeholder value when there are no bumps
+            largest_peak_day_distance = None  # Placeholder value when there are no bumps
+
+        return pd.Series([percentage_below_lower, percentage_between_thresholds, percentage_above_upper, variance_factor, 
+                          closest_peak_day_distance, largest_peak_day_distance],
+                         index=['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
+                                'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance'])
+
+    # Apply the function and add new columns to the DataFrame
+    bump_df[['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
+             'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance']] = bump_df.apply(calculate_metrics, axis=1)
+    return bump_df
+
+best_config_df = add_compliance_metrics(best_config_df)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### VISUALISING TIME SERIES WITH BUMPS
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def visualize_bumps(bump_df, N, sim_column = "max_sim_ctfidf_representation_sentence_list", alpha = 0.03,\
+                    min_date=datetime.date(2019,1,1), max_date=datetime.date(2020,4,24), with_bump = True, \
+                   max_days_from_peak = None, metric_ranges=None):
+    # Extract the global start and end dates from the DataFrame
+    global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
+    global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
+
+    # Generate a timeline from the global start to end date
+    timeline = pd.date_range(start=global_start_date, end=global_end_date)
+    
+    #
+    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column) 
+                          &(bump_df["alpha"] == alpha) 
+                          &(bump_df["date"] >=min_date) 
+                          &(bump_df["date"] <=max_date)]
+    
+    if with_bump:
+        filtered_df = filtered_df[filtered_df["has_bumps"]==True]
+        if max_days_from_peak:
+            filtered_df = filtered_df[filtered_df["closest_peak_day_distance"] <= max_days_from_peak]
+            
+    if metric_ranges:
+        for metric, (min_value, max_value) in metric_ranges.items():
+            filtered_df = filtered_df[(filtered_df[metric] >= min_value) & (filtered_df[metric] <= max_value)]
+    
+    # Sample N random clusters
+    sampled_clusters = filtered_df.sample(n=N, replace=False)
+
+    # Plotting
+    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
+
+    if N == 1:
+        axs = [axs]  # Make sure axs is iterable for a single plot
+
+    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
+        # Extract smoothed values from the DataFrame
+        smoothed_values = row['smoothed_values']
+        representation = row['global_tfidf_representation']
+        date = row['date']
+            
+        # Plot original and smoothed values
+        ax.plot(timeline, smoothed_values, label=f'LOESS {alpha}', color='red')
+
+        # Highlight the closest bump peak date
+        if row['closest_bump_peak_date']:
+            ax.axvline(x=row['closest_bump_peak_date'], color='green', linestyle='--', label='Closest Bump Peak')
+        
+        ax.axvline(x=row['date'], color='orange', linestyle='--', label='Date of topic')
+        ax.hlines(y=row["lower_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+        ax.hlines(y=row["upper_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+
+        ax.set_title(f"Topic ID: {row['topic_id']} - Date: {date} - {representation[:5]} \n {representation[5:]} ")
+        ax.set_xlabel('Timeline Date')
+        ax.set_ylabel('Smoothed Value')
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Example usage
+# visualize_bumps(event_candidates_df, N=5, sim_column = "max_sim_global_tfidf_representation_weighted_list", 
+#                 alpha = 0.03,
+#                 min_date =  datetime.date(2019,1,1),
+#                 max_date =  datetime.date(2020,4,24))
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+ground_truth_df[ground_truth_df["label"]==True].sort_values(by="date")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+metric_ranges = {
+#   'percentage_below_lower': (60, 100),
+#    'percentage_between_thresholds': (25, 75),
+#    'percentage_above_upper': (0, 50),
+#    'variance_factor': (0, 10),
+#    'total_bumps':(1,1),
+    'topic_id': (0,0),
+}
+
+visualize_bumps(best_config_df, 
+                N=1, 
+                sim_column = "max_sim_global_tfidf_representation_weighted_list",#"max_sim_ctfidf_representation_sentence_list", 
+                alpha = 0.03,
+                min_date =  datetime.date(2019,3,19),
+                max_date =  datetime.date(2019,3,19),
+                with_bump = False,
+                max_days_from_peak = 100,
+                metric_ranges = metric_ranges
+               )
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Example of filtering based on time spent in certain inteval, variance_factor and bump-date distance
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Now you can easily filter and analyze the DataFrame based on the new metrics
+max_delta_days = 15
+ #(event_candidates_df['percentage_below_lower'] >= 75) \
+filtered_bump_df = event_candidates_df[(event_candidates_df['percentage_below_lower'] >= 50)
+                                       & (event_candidates_df['variance_factor'] <= 5) 
+                                      & (event_candidates_df['closest_peak_day_distance'] <= max_delta_days)] 
+print(f"Filtered DataFrame has {len(filtered_bump_df)} rows out of {len(event_candidates_df)} total rows.")
+
+# Optionally, you can inspect the DataFrame to see the distribution or summary statistics
+print(filtered_bump_df[['percentage_below_lower', 'variance_factor']].describe())
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print("Number of bumps: \n", filtered_bump_df.total_bumps.value_counts())
+bump_counts = filtered_bump_df.groupby(['similarity_column', 'alpha']).size().reset_index(name='count')
+print("\nNumber of event candidates per combination: \n")
+bump_counts.sort_values(by="count", ascending = False)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+bump_counts.sort_values(by="count")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Experimenting with graphs for different filters
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Adding columns for filtering - percentage of time above/below thresholds, variance_factor etc.
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import warnings
+warnings.filterwarnings('ignore')
+
+def add_compliance_metrics(bump_df):
+    # Define a function to calculate the compliance metrics along with day distances
+    def calculate_metrics(row):
+        lower_threshold = row['lower_threshold']
+        upper_threshold = row['upper_threshold']
+        smoothed_values = row['smoothed_values']
+
+        # Calculate the percentage of values below the lower threshold
+        below_threshold_count = sum(value <= lower_threshold for value in smoothed_values)
+        percentage_below_lower = (below_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the percentage of values strictly between the lower and upper thresholds
+        between_threshold_count = sum(lower_threshold < value < upper_threshold for value in smoothed_values)
+        percentage_between_thresholds = (between_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the percentage of values above the upper threshold
+        above_threshold_count = sum(value > upper_threshold for value in smoothed_values)
+        percentage_above_upper = (above_threshold_count / len(smoothed_values)) * 100
+
+        # Calculate the min-max variance factor
+        max_value = max(smoothed_values)
+        min_value = min(smoothed_values)
+        variance = max_value - min_value
+        threshold_difference = upper_threshold - lower_threshold
+        variance_factor = variance / threshold_difference if threshold_difference != 0 else float('inf')  # Prevent division by zero
+
+        # Calculate day distances for closest and largest bump peaks
+        closest_peak_day_distance = abs((row['closest_bump_peak_date'] - row['date']).days)
+        largest_peak_day_distance = abs((row['largest_bump_peak_date'] - row['date']).days)
+
+        return pd.Series([percentage_below_lower, percentage_between_thresholds, percentage_above_upper, variance_factor, 
+                          closest_peak_day_distance, largest_peak_day_distance],
+                         index=['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
+                                'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance'])
+
+    # Apply the function and add new columns to the DataFrame
+    bump_df[['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
+             'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance']] = bump_df.apply(calculate_metrics, axis=1)
+    return bump_df
+
+# Example usage with your DataFrame
+event_candidates_df = add_compliance_metrics(best_config_df)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Viusalising distributions of additional columns
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Setting aesthetics for seaborn
+sns.set(style="whitegrid")
+
+def visualize_distributions(data_frame):
+    plt.figure(figsize=(18, 12))
+
+    # Histogram and Density Plot for 'percentage_below_lower'
+    plt.subplot(2, 3, 1)
+    sns.histplot(data_frame['percentage_below_lower'], kde=True, color='blue', bins=30)
+    plt.title('Distribution of % Below Lower Threshold')
+    plt.xlabel('% of Time Below Lower Threshold')
+    plt.ylabel('Frequency')
+
+    # Histogram and Density Plot for 'percentage_between_thresholds'
+    plt.subplot(2, 3, 2)
+    sns.histplot(data_frame['percentage_between_thresholds'], kde=True, color='purple', bins=30)
+    plt.title('Distribution of % Between Thresholds')
+    plt.xlabel('% of Time Between Thresholds')
+    plt.ylabel('Frequency')
+
+    # Histogram and Density Plot for 'percentage_above_upper'
+    plt.subplot(2, 3, 3)
+    sns.histplot(data_frame['percentage_above_upper'], kde=True, color='red', bins=30)
+    plt.title('Distribution of % Above Upper Threshold')
+    plt.xlabel('% of Time Above Upper Threshold')
+    plt.ylabel('Frequency')
+
+    # Histogram and Density Plot for 'variance_factor'
+    plt.subplot(2, 3, 4)
+    sns.histplot(data_frame['variance_factor'], kde=True, color='green', bins=30)
+    plt.title('Distribution of Variance Factor')
+    plt.xlabel('Min-Max to Threshold Difference Factor')
+    plt.ylabel('Frequency')
+
+    # Boxplots for detailed distribution analysis
+    plt.subplot(2, 3, 5)
+    sns.boxplot(y=data_frame['percentage_below_lower'], color='cyan')
+    plt.title('Boxplot of % Below Lower Threshold')
+    plt.ylabel('% of Time Below Lower Threshold')
+
+    plt.subplot(2, 3, 6)
+    sns.boxplot(y=data_frame['variance_factor'], color='lightgreen')
+    plt.title('Boxplot of Variance Factor')
+    plt.ylabel('Min-Max to Threshold Difference Factor')
+
+    plt.tight_layout()
+    plt.show()
+
+# Assuming 'event_candidates_df' is your DataFrame
+visualize_distributions(event_candidates_df)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+visualize_bumps(bump_df = filtered_bump_df,
+                N=3, 
+                sim_column = "max_sim_keybert_representation_sentence_list", 
+                alpha = 0.05,
+                min_date =  datetime.date(2019,10,1),
+                max_date =  datetime.date(2019,11,1),
+               )
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
+# ### Manual labeling Notes
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # notes = [
@@ -1260,138 +1501,75 @@ plt.show()
 # ### Comparing Bump detection events to GPTs events
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Ensure uniqueness by dropping duplicates before processing
-gpt_events_df = weekly_events_df
-event_candidates_df = bump_df[bump_df["has_bumps"]]
+# # Ensure uniqueness by dropping duplicates before processing
+# gpt_events_df = weekly_events_df
+# event_candidates_df = bump_df[bump_df["has_bumps"]]
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-import pandas as pd
-import datetime
-import numpy as np
+# from sentence_transformers import SentenceTransformer
+# from sklearn.metrics.pairwise import cosine_similarity
+# import pandas as pd
+# import datetime
+# import numpy as np
 
-# Load the Sentence Transformer model
-device = select_gpu_with_most_free_memory()
-model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', device=device)
+# # Load the Sentence Transformer model
+# device = select_gpu_with_most_free_memory()
+# model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', device=device)
 
-def join_and_encode(df, text_columns):
-    """Join terms in specified columns into a string and batch encode them."""
-    for column in tqdm(text_columns, desc = "Processing columns"):
-        df[column + '_joined'] = df[column].apply(lambda terms: ', '.join(terms))
-    unique_texts = pd.concat([df[col + '_joined'] for col in text_columns]).unique()
-    embeddings = model.encode(unique_texts, show_progress_bar=True)
-    # Normalize the embeddings
-    normalized_embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-    text_to_embedding = dict(zip(unique_texts, normalized_embeddings))
-    for column in text_columns:
-        df[column + '_embedding'] = df[column + '_joined'].map(text_to_embedding)
-    return df.drop(columns=[col + '_joined' for col in text_columns])
+# def join_and_encode(df, text_columns):
+#     """Join terms in specified columns into a string and batch encode them."""
+#     for column in tqdm(text_columns, desc = "Processing columns"):
+#         df[column + '_joined'] = df[column].apply(lambda terms: ', '.join(terms))
+#     unique_texts = pd.concat([df[col + '_joined'] for col in text_columns]).unique()
+#     embeddings = model.encode(unique_texts, show_progress_bar=True)
+#     # Normalize the embeddings
+#     normalized_embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+#     text_to_embedding = dict(zip(unique_texts, normalized_embeddings))
+#     for column in text_columns:
+#         df[column + '_embedding'] = df[column + '_joined'].map(text_to_embedding)
+#     return df.drop(columns=[col + '_joined' for col in text_columns])
 
-def prepare_embeddings(df, text_columns, date_column):
-    # Create a copy of the DataFrame to avoid modifying the original
-    df_copy = df[text_columns + ['topic_id', date_column]].copy()
-    # Drop duplicates based on 'topic_id' and the date_column to ensure unique pairs
-    df_copy = df_copy.drop_duplicates(['topic_id', date_column])
-    df_copy.rename(columns={date_column: 'date'}, inplace=True)
-    df_copy.set_index(['topic_id', 'date'], inplace=True)
-    return join_and_encode(df_copy, text_columns)
+# def prepare_embeddings(df, text_columns, date_column):
+#     # Create a copy of the DataFrame to avoid modifying the original
+#     df_copy = df[text_columns + ['topic_id', date_column]].copy()
+#     # Drop duplicates based on 'topic_id' and the date_column to ensure unique pairs
+#     df_copy = df_copy.drop_duplicates(['topic_id', date_column])
+#     df_copy.rename(columns={date_column: 'date'}, inplace=True)
+#     df_copy.set_index(['topic_id', 'date'], inplace=True)
+#     return join_and_encode(df_copy, text_columns)
 
-# Specify columns for representations
-gpt_text_columns = ['ctfidf_representation', 'keybert_representation']
-candidate_text_columns = ['ctfidf_representation', 'keybert_representation']
+# # Specify columns for representations
+# gpt_text_columns = ['ctfidf_representation', 'keybert_representation']
+# candidate_text_columns = ['ctfidf_representation', 'keybert_representation']
 
-# Prepare embeddings for GPT events and candidates without modifying the original DataFrames
-gpt_embeddings_df = prepare_embeddings(weekly_events_df, gpt_text_columns, 'start_date')
-candidate_embeddings_df = prepare_embeddings(bump_df[bump_df["has_bumps"]], candidate_text_columns, 'date')
+# # Prepare embeddings for GPT events and candidates without modifying the original DataFrames
+# gpt_embeddings_df = prepare_embeddings(weekly_events_df, gpt_text_columns, 'start_date')
+# candidate_embeddings_df = prepare_embeddings(bump_df[bump_df["has_bumps"]], candidate_text_columns, 'date')
 
-def calculate_cosine_similarity(embedding1, embedding2):
-    """Calculate the cosine similarity between two normalized embeddings."""
-    return np.dot(embedding1, embedding2)
+# def calculate_cosine_similarity(embedding1, embedding2):
+#     """Calculate the cosine similarity between two normalized embeddings."""
+#     return np.dot(embedding1, embedding2)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-def calculate_overlap(tweet_ids1, tweet_ids2):
-    set1 = set(tweet_ids1)
-    set2 = set(tweet_ids2)
-    intersection = len(set1.intersection(set2))
-    overlap_left = intersection / len(set1) if set1 else 0
-    overlap_right = intersection / len(set2) if set2 else 0
-    return overlap_left, overlap_right
+# def calculate_overlap(tweet_ids1, tweet_ids2):
+#     set1 = set(tweet_ids1)
+#     set2 = set(tweet_ids2)
+#     intersection = len(set1.intersection(set2))
+#     overlap_left = intersection / len(set1) if set1 else 0
+#     overlap_right = intersection / len(set2) if set2 else 0
+#     return overlap_left, overlap_right
 
-# Assuming weekly_events_df is loaded and ready
-np.random.seed(42)  # For reproducibility
-sampled_gpt_events = gpt_events_df#.sample(n=200, random_state=42)
+# # Assuming weekly_events_df is loaded and ready
+# np.random.seed(42)  # For reproducibility
+# sampled_gpt_events = gpt_events_df#.sample(n=200, random_state=42)
 
-# Assuming event_candidates_df has the necessary structure and data
-configurations = event_candidates_df[['similarity_column', 'alpha']].drop_duplicates()
+# # Assuming event_candidates_df has the necessary structure and data
+# configurations = event_candidates_df[['similarity_column', 'alpha']].drop_duplicates()
 
-# Dictionary to store results DataFrames by configuration
-config_results = {}
+# # Dictionary to store results DataFrames by configuration
+# config_results = {}
 
-# Loop over bump detection configs
-for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
-    results = []  # This will store results for the current configuration
-    filtered_candidates = event_candidates_df[
-        (event_candidates_df['similarity_column'] == config['similarity_column']) &
-        (event_candidates_df['alpha'] == config['alpha']) &
-        (event_candidates_df['has_bumps'] == True)
-    ]
-
-    # Preload all candidate embeddings for this config into a dictionary
-    candidate_embeddings_ctfidf = candidate_embeddings_df['ctfidf_representation_embedding'].to_dict()
-    candidate_embeddings_keybert = candidate_embeddings_df['keybert_representation_embedding'].to_dict()
-
-    for _, gpt_event in sampled_gpt_events.iterrows():
-        gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'ctfidf_representation_embedding']  
-        gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'keybert_representation_embedding']
-        
-        # Temporal filtering: daily events within the same week as the GPT event
-        same_week_candidates = filtered_candidates[
-            (filtered_candidates['date'] >= gpt_event['start_date']) & (filtered_candidates['date'] <= gpt_event['end_date'])
-        ]
-
-        for _, candidate in same_week_candidates.iterrows():
-            # Use preloaded embeddings for faster access
-            candidate_key = (candidate["topic_id"], candidate["date"])
-            candidate_embedding_ctfidf = candidate_embeddings_ctfidf[candidate_key]
-            candidate_embedding_keybert = candidate_embeddings_keybert[candidate_key]
-            
-            cos_sim_ctfidf = calculate_cosine_similarity(candidate_embedding_ctfidf, gpt_embeddings_ctfidf)
-            cos_sim_keybert = calculate_cosine_similarity(candidate_embedding_keybert, gpt_embeddings_keybert)
-            
-            tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
-
-            # Store the results
-            result = {
-                'gpt_start_date': gpt_event['start_date'],
-                'gpt_end_date': gpt_event['end_date'],
-                'gpt_id': gpt_event['topic_id'],
-                'gpt_name': gpt_event['event_name'],
-                
-                'candidate_date': candidate['date'],
-                'candidate_id': candidate['topic_id'],
-                
-                'tweet_overlap_left': tweet_overlap_left,
-                'tweet_overlap_right': tweet_overlap_right,
-                
-                'gpt_keybert': gpt_event['keybert_representation'],
-                'candidate_keybert': candidate['keybert_representation'],
-                'cos_sim_keybert': cos_sim_keybert,
-                
-                'gpt_ctfidf': gpt_event['ctfidf_representation'],
-                'candidate_ctfidf': candidate['ctfidf_representation'],
-                'cos_sim_ctfidf': cos_sim_ctfidf,
-            }
-            results.append(result)
-
-    # Store each configuration's results in a separate DataFrame within the dictionary
-    config_key = (config['similarity_column'], config['alpha'])
-    event_mappings = pd.DataFrame(results)
-    event_mappings = event_mappings[(event_mappings["tweet_overlap_left"] >= 0.5) | (event_mappings["tweet_overlap_right"] >= 0.5)]
-    config_results[config_key] = event_mappings
-
-print("Similarity calculations completed.")
-
+# # Loop over bump detection configs
 # for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
 #     results = []  # This will store results for the current configuration
 #     filtered_candidates = event_candidates_df[
@@ -1400,28 +1578,27 @@ print("Similarity calculations completed.")
 #         (event_candidates_df['has_bumps'] == True)
 #     ]
 
+#     # Preload all candidate embeddings for this config into a dictionary
+#     candidate_embeddings_ctfidf = candidate_embeddings_df['ctfidf_representation_embedding'].to_dict()
+#     candidate_embeddings_keybert = candidate_embeddings_df['keybert_representation_embedding'].to_dict()
+
 #     for _, gpt_event in sampled_gpt_events.iterrows():
-#         gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
-#                                                       'ctfidf_representation_embedding']  
-#         gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
-#                                                       'keybert_representation_embedding']
+#         gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'ctfidf_representation_embedding']  
+#         gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]), 'keybert_representation_embedding']
         
 #         # Temporal filtering: daily events within the same week as the GPT event
 #         same_week_candidates = filtered_candidates[
-#             (filtered_candidates['date'] >= gpt_event['start_date']) &
-#             (filtered_candidates['date'] <= gpt_event['end_date'])
+#             (filtered_candidates['date'] >= gpt_event['start_date']) & (filtered_candidates['date'] <= gpt_event['end_date'])
 #         ]
 
 #         for _, candidate in same_week_candidates.iterrows():
+#             # Use preloaded embeddings for faster access
+#             candidate_key = (candidate["topic_id"], candidate["date"])
+#             candidate_embedding_ctfidf = candidate_embeddings_ctfidf[candidate_key]
+#             candidate_embedding_keybert = candidate_embeddings_keybert[candidate_key]
             
-#             candidate_embeddings_ctfidf = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
-#                                                       'ctfidf_representation_embedding']
-#             candidate_embeddings_keybert = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
-#                                                       'keybert_representation_embedding']
-            
-            
-#             cos_sim_ctfidf = calculate_cosine_similarity(candidate_embeddings_ctfidf, gpt_embeddings_ctfidf)
-#             cos_sim_keybert = calculate_cosine_similarity(candidate_embeddings_keybert, gpt_embeddings_keybert)
+#             cos_sim_ctfidf = calculate_cosine_similarity(candidate_embedding_ctfidf, gpt_embeddings_ctfidf)
+#             cos_sim_keybert = calculate_cosine_similarity(candidate_embedding_keybert, gpt_embeddings_keybert)
             
 #             tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
 
@@ -1451,211 +1628,75 @@ print("Similarity calculations completed.")
 #     # Store each configuration's results in a separate DataFrame within the dictionary
 #     config_key = (config['similarity_column'], config['alpha'])
 #     event_mappings = pd.DataFrame(results)
-#     event_mappings = event_mappings[(event_mappings["tweet_overlap_left"]>=0.5)| \
-#                                     (event_mappings["tweet_overlap_right"]>=0.5)]
+#     event_mappings = event_mappings[(event_mappings["tweet_overlap_left"] >= 0.5) | (event_mappings["tweet_overlap_right"] >= 0.5)]
 #     config_results[config_key] = event_mappings
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-pd.set_option('display.expand_frame_repr', False)
-pd.set_option('max_colwidth', -1)
-config_results[('max_sim_global_tfidf_representation_weighted_list', 0.03)].sort_values(by =["tweet_overlap_left","tweet_overlap_right"], ascending = False)
+# print("Similarity calculations completed.")
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### Adding columns for filtering - percentage of time above/below thresholds, variance_factor etc.
+# # for _, config in tqdm(configurations.iterrows(), desc="Processing configurations"):
+# #     results = []  # This will store results for the current configuration
+# #     filtered_candidates = event_candidates_df[
+# #         (event_candidates_df['similarity_column'] == config['similarity_column']) &
+# #         (event_candidates_df['alpha'] == config['alpha']) &
+# #         (event_candidates_df['has_bumps'] == True)
+# #     ]
 
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-import warnings
-warnings.filterwarnings('ignore')
-
-def add_compliance_metrics(bump_df):
-    # Define a function to calculate the compliance metrics along with day distances
-    def calculate_metrics(row):
-        lower_threshold = row['lower_threshold']
-        upper_threshold = row['upper_threshold']
-        smoothed_values = row['smoothed_values']
-
-        # Calculate the percentage of values below the lower threshold
-        below_threshold_count = sum(value <= lower_threshold for value in smoothed_values)
-        percentage_below_lower = (below_threshold_count / len(smoothed_values)) * 100
-
-        # Calculate the percentage of values strictly between the lower and upper thresholds
-        between_threshold_count = sum(lower_threshold < value < upper_threshold for value in smoothed_values)
-        percentage_between_thresholds = (between_threshold_count / len(smoothed_values)) * 100
-
-        # Calculate the percentage of values above the upper threshold
-        above_threshold_count = sum(value > upper_threshold for value in smoothed_values)
-        percentage_above_upper = (above_threshold_count / len(smoothed_values)) * 100
-
-        # Calculate the min-max variance factor
-        max_value = max(smoothed_values)
-        min_value = min(smoothed_values)
-        variance = max_value - min_value
-        threshold_difference = upper_threshold - lower_threshold
-        variance_factor = variance / threshold_difference if threshold_difference != 0 else float('inf')  # Prevent division by zero
-
-        # Calculate day distances for closest and largest bump peaks
-        closest_peak_day_distance = abs((row['closest_bump_peak_date'] - row['date']).days)
-        largest_peak_day_distance = abs((row['largest_bump_peak_date'] - row['date']).days)
-
-        return pd.Series([percentage_below_lower, percentage_between_thresholds, percentage_above_upper, variance_factor, 
-                          closest_peak_day_distance, largest_peak_day_distance],
-                         index=['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
-                                'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance'])
-
-    # Apply the function and add new columns to the DataFrame
-    bump_df[['percentage_below_lower', 'percentage_between_thresholds', 'percentage_above_upper', 
-             'variance_factor', 'closest_peak_day_distance', 'largest_peak_day_distance']] = bump_df.apply(calculate_metrics, axis=1)
-    return bump_df
-
-# Example usage with your DataFrame
-event_candidates_df = add_compliance_metrics(event_candidates_df)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-event_candidates_df.columns
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### Viusalising distributions of additional columns
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Setting aesthetics for seaborn
-sns.set(style="whitegrid")
-
-def visualize_distributions(data_frame):
-    plt.figure(figsize=(18, 12))
-
-    # Histogram and Density Plot for 'percentage_below_lower'
-    plt.subplot(2, 3, 1)
-    sns.histplot(data_frame['percentage_below_lower'], kde=True, color='blue', bins=30)
-    plt.title('Distribution of % Below Lower Threshold')
-    plt.xlabel('% of Time Below Lower Threshold')
-    plt.ylabel('Frequency')
-
-    # Histogram and Density Plot for 'percentage_between_thresholds'
-    plt.subplot(2, 3, 2)
-    sns.histplot(data_frame['percentage_between_thresholds'], kde=True, color='purple', bins=30)
-    plt.title('Distribution of % Between Thresholds')
-    plt.xlabel('% of Time Between Thresholds')
-    plt.ylabel('Frequency')
-
-    # Histogram and Density Plot for 'percentage_above_upper'
-    plt.subplot(2, 3, 3)
-    sns.histplot(data_frame['percentage_above_upper'], kde=True, color='red', bins=30)
-    plt.title('Distribution of % Above Upper Threshold')
-    plt.xlabel('% of Time Above Upper Threshold')
-    plt.ylabel('Frequency')
-
-    # Histogram and Density Plot for 'variance_factor'
-    plt.subplot(2, 3, 4)
-    sns.histplot(data_frame['variance_factor'], kde=True, color='green', bins=30)
-    plt.title('Distribution of Variance Factor')
-    plt.xlabel('Min-Max to Threshold Difference Factor')
-    plt.ylabel('Frequency')
-
-    # Boxplots for detailed distribution analysis
-    plt.subplot(2, 3, 5)
-    sns.boxplot(y=data_frame['percentage_below_lower'], color='cyan')
-    plt.title('Boxplot of % Below Lower Threshold')
-    plt.ylabel('% of Time Below Lower Threshold')
-
-    plt.subplot(2, 3, 6)
-    sns.boxplot(y=data_frame['variance_factor'], color='lightgreen')
-    plt.title('Boxplot of Variance Factor')
-    plt.ylabel('Min-Max to Threshold Difference Factor')
-
-    plt.tight_layout()
-    plt.show()
-
-# Assuming 'event_candidates_df' is your DataFrame
-visualize_distributions(event_candidates_df)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### VISUALISING TIME SERIES WITH BUMPS
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-def visualize_bumps(bump_df, N, sim_column, alpha = 0.05, min_date=datetime.date(2019,1,1), max_date=datetime.date(2020,4,24)):
-    # Extract the global start and end dates from the DataFrame
-    global_start_date = datetime.date(2019,1,1) #bump_df['date'].min()
-    global_end_date = datetime.date(2020,4,24) #bump_df['date'].max()
-
-    # Generate a timeline from the global start to end date
-    timeline = pd.date_range(start=global_start_date, end=global_end_date)
-    
-    #
-    filtered_df = bump_df[(bump_df["similarity_column"] == sim_column) 
-                          &(bump_df["alpha"] == alpha) 
-                          &(bump_df["date"] >=min_date) 
-                          &(bump_df["date"] <=max_date)]
-    
-    # Sample N random clusters
-    sampled_clusters = filtered_df.sample(n=N, replace=False)
-
-    # Plotting
-    fig, axs = plt.subplots(N, 1, figsize=(10, N * 4))
-
-    if N == 1:
-        axs = [axs]  # Make sure axs is iterable for a single plot
-
-    for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
-        # Extract smoothed values from the DataFrame
-        smoothed_values = row['smoothed_values']
-
-        # Plot original and smoothed values
-        ax.plot(timeline, smoothed_values, label=f'LOESS {alpha}', color='red')
-
-        # Highlight the closest bump peak date
-        if row['closest_bump_peak_date']:
-            ax.axvline(x=row['closest_bump_peak_date'], color='green', linestyle='--', label='Closest Bump Peak')
+# #     for _, gpt_event in sampled_gpt_events.iterrows():
+# #         gpt_embeddings_ctfidf = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
+# #                                                       'ctfidf_representation_embedding']  
+# #         gpt_embeddings_keybert = gpt_embeddings_df.loc[(gpt_event["topic_id"], gpt_event["start_date"]),\
+# #                                                       'keybert_representation_embedding']
         
-        ax.axvline(x=row['date'], color='orange', linestyle='--', label='Date of topic')
-        ax.hlines(y=row["lower_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
-        ax.hlines(y=row["upper_threshold"], xmin = timeline.min(),xmax = timeline.max(),linewidth=1, color='black')
+# #         # Temporal filtering: daily events within the same week as the GPT event
+# #         same_week_candidates = filtered_candidates[
+# #             (filtered_candidates['date'] >= gpt_event['start_date']) &
+# #             (filtered_candidates['date'] <= gpt_event['end_date'])
+# #         ]
 
-        ax.set_title(f"Topic ID: {row['topic_id']} - Date: {row['date']} - {row['global_tfidf_representation']}")
-        ax.set_xlabel('Timeline Date')
-        ax.set_ylabel('Smoothed Value')
-        ax.legend()
+# #         for _, candidate in same_week_candidates.iterrows():
+            
+# #             candidate_embeddings_ctfidf = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
+# #                                                       'ctfidf_representation_embedding']
+# #             candidate_embeddings_keybert = candidate_embeddings_df.loc[(candidate["topic_id"], candidate["date"]),\
+# #                                                       'keybert_representation_embedding']
+            
+            
+# #             cos_sim_ctfidf = calculate_cosine_similarity(candidate_embeddings_ctfidf, gpt_embeddings_ctfidf)
+# #             cos_sim_keybert = calculate_cosine_similarity(candidate_embeddings_keybert, gpt_embeddings_keybert)
+            
+# #             tweet_overlap_left, tweet_overlap_right = calculate_overlap(candidate['tweet_ids'], gpt_event['tweet_ids'])
 
-    plt.tight_layout()
-    plt.show()
+# #             # Store the results
+# #             result = {
+# #                 'gpt_start_date': gpt_event['start_date'],
+# #                 'gpt_end_date': gpt_event['end_date'],
+# #                 'gpt_id': gpt_event['topic_id'],
+# #                 'gpt_name': gpt_event['event_name'],
+                
+# #                 'candidate_date': candidate['date'],
+# #                 'candidate_id': candidate['topic_id'],
+                
+# #                 'tweet_overlap_left': tweet_overlap_left,
+# #                 'tweet_overlap_right': tweet_overlap_right,
+                
+# #                 'gpt_keybert': gpt_event['keybert_representation'],
+# #                 'candidate_keybert': candidate['keybert_representation'],
+# #                 'cos_sim_keybert': cos_sim_keybert,
+                
+# #                 'gpt_ctfidf': gpt_event['ctfidf_representation'],
+# #                 'candidate_ctfidf': candidate['ctfidf_representation'],
+# #                 'cos_sim_ctfidf': cos_sim_ctfidf,
+# #             }
+# #             results.append(result)
 
-# Example usage
-# visualize_bumps(event_candidates_df, N=5, sim_column = "max_sim_global_tfidf_representation_weighted_list", 
-#                 alpha = 0.03,
-#                 min_date =  datetime.date(2019,1,1),
-#                 max_date =  datetime.date(2020,4,24))
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### Example of filtering based on time spent in certain inteval, variance_factor and bump-date distance
+# #     # Store each configuration's results in a separate DataFrame within the dictionary
+# #     config_key = (config['similarity_column'], config['alpha'])
+# #     event_mappings = pd.DataFrame(results)
+# #     event_mappings = event_mappings[(event_mappings["tweet_overlap_left"]>=0.5)| \
+# #                                     (event_mappings["tweet_overlap_right"]>=0.5)]
+# #     config_results[config_key] = event_mappings
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Now you can easily filter and analyze the DataFrame based on the new metrics
-max_delta_days = 15
- #(event_candidates_df['percentage_below_lower'] >= 75) \
-filtered_bump_df = event_candidates_df[(event_candidates_df['percentage_below_lower'] >= 50)
-                                       & (event_candidates_df['variance_factor'] <= 5) 
-                                      & (event_candidates_df['closest_peak_day_distance'] <= max_delta_days)] 
-print(f"Filtered DataFrame has {len(filtered_bump_df)} rows out of {len(event_candidates_df)} total rows.")
-
-# Optionally, you can inspect the DataFrame to see the distribution or summary statistics
-print(filtered_bump_df[['percentage_below_lower', 'variance_factor']].describe())
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-print("Number of bumps: \n", filtered_bump_df.total_bumps.value_counts())
-bump_counts = filtered_bump_df.groupby(['similarity_column', 'alpha']).size().reset_index(name='count')
-print("\nNumber of event candidates per combination: \n")
-bump_counts.sort_values(by="count", ascending = False)
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-bump_counts.sort_values(by="count")
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
-# ### Experimenting with graphs for different filters
-
-# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-visualize_bumps(bump_df = filtered_bump_df,
-                N=3, 
-                sim_column = "max_sim_keybert_representation_sentence_list", 
-                alpha = 0.05,
-                min_date =  datetime.date(2019,10,1),
-                max_date =  datetime.date(2019,11,1),
-               )
+# pd.set_option('display.expand_frame_repr', False)
+# pd.set_option('max_colwidth', -1)
+# config_results[('max_sim_global_tfidf_representation_weighted_list', 0.03)].sort_values(by =["tweet_overlap_left","tweet_overlap_right"], ascending = False)
