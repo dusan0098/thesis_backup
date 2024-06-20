@@ -823,8 +823,8 @@ df_wide = bump_df[["topic_id","date","similarity_column","alpha", "smoothed_valu
 #                                                              max_bump_width_values)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# import pickle
-# bump_detection_results_path = os.path.join(bump_evaluation_path, 'bump_results_dict.pkl')
+import pickle
+bump_detection_results_path = os.path.join(bump_evaluation_path, 'bump_results_dict.pkl')
 
 # with open(bump_detection_results_path, 'wb') as handle:
 #     pickle.dump(bump_results_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -895,20 +895,46 @@ config_results_df = pd.DataFrame(config_results)
 config_results_df.sort_values(by=["f1_score", "recall"], ascending=False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Assuming config_results_df is already created
-# Ensure the similarity_column is sorted alphabetically
-sorted_similarity_columns = sorted(config_results_df['similarity_column'].unique())
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Create a pivot table with sorted similarity_column
-f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
-f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+# Calculate the maximum F1-score for each configuration
+config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 'max_bump_width'])['f1_score'].max().reset_index()
 
-# Create a heatmap
-plt.figure(figsize=(10, 8))
-sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
-plt.title('F1-score Heatmap')
-plt.xlabel('Alpha Value')
-plt.ylabel('Similarity Column')
+# Identify the top 3 configurations with the highest maximum F1-scores
+top_3_configs = config_max_f1.nlargest(3, 'f1_score')
+
+# Create a figure to hold the heatmaps
+fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
+
+# Iterate over the top 3 configurations and create heatmaps
+for i, (index, config) in enumerate(top_3_configs.iterrows()):
+    quantiles = config['quantiles']
+    min_days_above_upper = config['min_days_above_upper']
+    max_bump_width = config['max_bump_width']
+    
+    # Filter the original results for the current configuration
+    config_filter = (
+        (config_results_df['quantiles'] == quantiles) & 
+        (config_results_df['min_days_above_upper'] == min_days_above_upper) & 
+        (config_results_df['max_bump_width'] == max_bump_width)
+    )
+    config_subset = config_results_df[config_filter]
+    
+    # Create a pivot table for the current configuration
+    f1_pivot = config_subset.pivot(index='similarity_column', columns='alpha', values='f1_score')
+    
+    # Sort the similarity columns for better visualization
+    sorted_similarity_columns = sorted(f1_pivot.index)
+    f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+    
+    # Create the heatmap
+    sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5, ax=axes[i])
+    axes[i].set_title(f'F1-score Heatmap\nQuantiles: {quantiles}, Min Days Above: {min_days_above_upper}, Max Width: {max_bump_width}')
+    axes[i].set_xlabel('Alpha Value')
+    axes[i].set_ylabel('Similarity Column')
+
+plt.tight_layout()
 plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
@@ -970,17 +996,46 @@ config_results_df = pd.DataFrame(config_results)
 config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Assuming config_results_df is already created
-# Create a pivot table
-f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
-f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Create a heatmap
-plt.figure(figsize=(10, 8))
-sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
-plt.title('F1-score Heatmap')
-plt.xlabel('Alpha Value')
-plt.ylabel('Similarity Column')
+# Calculate the maximum F1-score for each configuration
+config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 'max_bump_width'])['f1_score'].max().reset_index()
+
+# Identify the top 3 configurations with the highest maximum F1-scores
+top_3_configs = config_max_f1.nlargest(3, 'f1_score')
+
+# Create a figure to hold the heatmaps
+fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
+
+# Iterate over the top 3 configurations and create heatmaps
+for i, (index, config) in enumerate(top_3_configs.iterrows()):
+    quantiles = config['quantiles']
+    min_days_above_upper = config['min_days_above_upper']
+    max_bump_width = config['max_bump_width']
+    
+    # Filter the original results for the current configuration
+    config_filter = (
+        (config_results_df['quantiles'] == quantiles) & 
+        (config_results_df['min_days_above_upper'] == min_days_above_upper) & 
+        (config_results_df['max_bump_width'] == max_bump_width)
+    )
+    config_subset = config_results_df[config_filter]
+    
+    # Create a pivot table for the current configuration
+    f1_pivot = config_subset.pivot(index='similarity_column', columns='alpha', values='f1_score')
+    
+    # Sort the similarity columns for better visualization
+    sorted_similarity_columns = sorted(f1_pivot.index)
+    f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+    
+    # Create the heatmap
+    sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5, ax=axes[i])
+    axes[i].set_title(f'F1-score Heatmap\nQuantiles: {quantiles}, Min Days Above: {min_days_above_upper}, Max Width: {max_bump_width}')
+    axes[i].set_xlabel('Alpha Value')
+    axes[i].set_ylabel('Similarity Column')
+
+plt.tight_layout()
 plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: MARKDOWN
@@ -1046,17 +1101,46 @@ config_results_df = pd.DataFrame(config_results)
 config_results_df.sort_values(by = ["f1_score"], ascending = False)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
-# Assuming config_results_df is already created
-# Create a pivot table
-f1_pivot = config_results_df.pivot(index='similarity_column', columns='alpha', values='f1_score')
-f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Create a heatmap
-plt.figure(figsize=(10, 8))
-sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5)
-plt.title(f'F1-score Heatmap - max_days={max_days}')
-plt.xlabel('Alpha Value')
-plt.ylabel('Similarity Column')
+# Calculate the maximum F1-score for each configuration
+config_max_f1 = config_results_df.groupby(['quantiles', 'min_days_above_upper', 'max_bump_width'])['f1_score'].max().reset_index()
+
+# Identify the top 3 configurations with the highest maximum F1-scores
+top_3_configs = config_max_f1.nlargest(3, 'f1_score')
+
+# Create a figure to hold the heatmaps
+fig, axes = plt.subplots(1, 3, figsize=(20, 8), sharey=True)
+
+# Iterate over the top 3 configurations and create heatmaps
+for i, (index, config) in enumerate(top_3_configs.iterrows()):
+    quantiles = config['quantiles']
+    min_days_above_upper = config['min_days_above_upper']
+    max_bump_width = config['max_bump_width']
+    
+    # Filter the original results for the current configuration
+    config_filter = (
+        (config_results_df['quantiles'] == quantiles) & 
+        (config_results_df['min_days_above_upper'] == min_days_above_upper) & 
+        (config_results_df['max_bump_width'] == max_bump_width)
+    )
+    config_subset = config_results_df[config_filter]
+    
+    # Create a pivot table for the current configuration
+    f1_pivot = config_subset.pivot(index='similarity_column', columns='alpha', values='f1_score')
+    
+    # Sort the similarity columns for better visualization
+    sorted_similarity_columns = sorted(f1_pivot.index)
+    f1_pivot = f1_pivot.reindex(sorted_similarity_columns)
+    
+    # Create the heatmap
+    sns.heatmap(f1_pivot, annot=True, cmap='viridis', linewidths=.5, ax=axes[i])
+    axes[i].set_title(f'F1-score Heatmap\nQuantiles: {quantiles}, Min Days Above: {min_days_above_upper}, Max Width: {max_bump_width}')
+    axes[i].set_xlabel('Alpha Value')
+    axes[i].set_ylabel('Similarity Column')
+
+plt.tight_layout()
 plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
