@@ -774,6 +774,7 @@ for combined_key in combined_bump_results_dict:
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Initialize lists to store results
 config_results = []
+detailed_results = []
 
 # Iterate over each unique configuration
 for combined_key, combined_df in combined_bump_results_dict.items():
@@ -801,11 +802,36 @@ for combined_key, combined_df in combined_bump_results_dict.items():
             'recall': recall,
             'f1_score': f1
         })
+        
+        for idx, row in merged_df.iterrows():
+            detailed_results.append({
+                'quantiles': quantiles,
+                'min_days_above_upper': min_days_above_upper,
+                'max_bump_width': max_bump_width,
+                'similarity_column': similarity_column,
+                'alpha': alpha,
+                'topic_id': row['topic_id'],
+                'date': row['date'],
+                'gpt_event_name': row['gpt_event_name'],
+                'ground_truth_label': row['label'],
+                'predicted_label': bool(y_pred[idx]),
+            })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
+detailed_results_df = pd.DataFrame(detailed_results)
 
-config_results_df.sort_values(by=["f1_score", "recall"], ascending=False)
+config_results_df.sort_values(by=["f1_score", "recall"], ascending=False).head(20)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+filter_column = "max_sim_global_tfidf_representation_sentence_list"
+alpha = 0.04
+interesting_examples = detailed_results_df[#(detailed_results_df['quantiles'] == (0.4,0.6)) & 
+                                           #(detailed_results_df['min_days_above_upper'] == 1) & 
+                                           #(detailed_results_df['max_bump_width'] == 20) &
+                                           (detailed_results_df['similarity_column'] == filter_column)&
+                                           (detailed_results_df['alpha'] == alpha)]
+interesting_examples
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Function to strip the prefix and suffix from similarity_column names
@@ -852,20 +878,21 @@ f1_pivot_best = best_f1_per_combination.pivot(index='similarity_column', columns
 # Sort the similarity columns for better visualization
 f1_pivot_best = f1_pivot_best.reindex(sorted_similarity_columns)
 
-# Create a figure to hold the heatmaps
-fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharey=True)
-
 # Plot the heatmap for the top configuration
-sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5, ax=axes[0])
-axes[0].set_title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
-axes[0].set_xlabel('Alpha Value')
-axes[0].set_ylabel('Similarity Column')
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5)
+plt.title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.tight_layout()
+plt.show()
 
 # Plot the heatmap for the best F1-score per combination
-sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5, ax=axes[1])
-axes[1].set_title('F1-score Heatmap\nBest F1-score per config')
-axes[1].set_xlabel('Alpha Value')
-
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5)
+plt.title('F1-score Heatmap\nBest F1-score per config')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
 plt.tight_layout()
 plt.show()
 
@@ -875,6 +902,7 @@ plt.show()
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Initialize lists to store results
 config_results = []
+detailed_results = []
 
 # Iterate over each unique configuration
 for combined_key, combined_df in combined_bump_results_dict.items():
@@ -889,7 +917,7 @@ for combined_key, combined_df in combined_bump_results_dict.items():
         for _, row in merged_df.iterrows():
             if row['has_bumps']:
                 # Check if the date falls within the closest bump start and end dates
-                if (row['closest_bump_start_date'] <= row['date'] <= row['closest_bump_end_date']): # and (row['total_bumps'] ==1)
+                if (row['closest_bump_start_date'] <= row['date'] <= row['closest_bump_end_date']):# and (row['total_bumps'] ==1):
                     refined_predictions.append(1)  # Predict as event
                 else:
                     refined_predictions.append(0)  # Predict as non-event
@@ -916,11 +944,26 @@ for combined_key, combined_df in combined_bump_results_dict.items():
             'recall': recall,
             'f1_score': f1
         })
+        
+        for idx, row in merged_df.iterrows():
+            detailed_results.append({
+                'quantiles': quantiles,
+                'min_days_above_upper': min_days_above_upper,
+                'max_bump_width': max_bump_width,
+                'similarity_column': similarity_column,
+                'alpha': alpha,
+                'topic_id': row['topic_id'],
+                'date': row['date'],
+                'gpt_event_name': row['gpt_event_name'],
+                'ground_truth_label': row['label'],
+                'predicted_label': bool(y_pred[idx]),
+            })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
+detailed_results_df = pd.DataFrame(detailed_results)
 
-config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False)
+config_results_df.sort_values(by = ["f1_score", "recall"], ascending = False).head(20)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Calculate the maximum F1-score for each configuration
@@ -959,20 +1002,21 @@ f1_pivot_best = best_f1_per_combination.pivot(index='similarity_column', columns
 # Sort the similarity columns for better visualization
 f1_pivot_best = f1_pivot_best.reindex(sorted_similarity_columns)
 
-# Create a figure to hold the heatmaps
-fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharey=True)
-
 # Plot the heatmap for the top configuration
-sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5, ax=axes[0])
-axes[0].set_title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
-axes[0].set_xlabel('Alpha Value')
-axes[0].set_ylabel('Similarity Column')
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5)
+plt.title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.tight_layout()
+plt.show()
 
 # Plot the heatmap for the best F1-score per combination
-sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5, ax=axes[1])
-axes[1].set_title('F1-score Heatmap\nBest F1-score per config')
-axes[1].set_xlabel('Alpha Value')
-
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5)
+plt.title('F1-score Heatmap\nBest F1-score per config')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
 plt.tight_layout()
 plt.show()
 
@@ -987,6 +1031,7 @@ max_days = 10  # You can set this to any number of days you want
 
 # Initialize lists to store results
 config_results = []
+detailed_results = []
 
 # Iterate over each unique configuration
 for combined_key, combined_df in combined_bump_results_dict.items():
@@ -1028,11 +1073,26 @@ for combined_key, combined_df in combined_bump_results_dict.items():
             'recall': recall,
             'f1_score': f1
         })
+        
+        for idx, row in merged_df.iterrows():
+            detailed_results.append({
+                'quantiles': quantiles,
+                'min_days_above_upper': min_days_above_upper,
+                'max_bump_width': max_bump_width,
+                'similarity_column': similarity_column,
+                'alpha': alpha,
+                'topic_id': row['topic_id'],
+                'date': row['date'],
+                'gpt_event_name': row['gpt_event_name'],
+                'ground_truth_label': row['label'],
+                'predicted_label': bool(y_pred[idx]),
+        })
 
 # Convert results to DataFrame for better visualization
 config_results_df = pd.DataFrame(config_results)
+detailed_results_df = pd.DataFrame(detailed_results)
 
-config_results_df.sort_values(by = ["f1_score"], ascending = False)
+config_results_df.sort_values(by = ["f1_score"], ascending = False).head(20)
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # Calculate the maximum F1-score for each configuration
@@ -1071,20 +1131,21 @@ f1_pivot_best = best_f1_per_combination.pivot(index='similarity_column', columns
 # Sort the similarity columns for better visualization
 f1_pivot_best = f1_pivot_best.reindex(sorted_similarity_columns)
 
-# Create a figure to hold the heatmaps
-fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharey=True)
-
 # Plot the heatmap for the top configuration
-sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5, ax=axes[0])
-axes[0].set_title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
-axes[0].set_xlabel('Alpha Value')
-axes[0].set_ylabel('Similarity Column')
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_top, annot=True, cmap='viridis', linewidths=.5)
+plt.title(f'F1-score Heatmap\nTop Config\nQuantiles: {top_config["quantiles"]}, Min Days Above: {top_config["min_days_above_upper"]}, Max Width: {top_config["max_bump_width"]}')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
+plt.tight_layout()
+plt.show()
 
 # Plot the heatmap for the best F1-score per combination
-sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5, ax=axes[1])
-axes[1].set_title('F1-score Heatmap\nBest F1-score per config')
-axes[1].set_xlabel('Alpha Value')
-
+plt.figure(figsize=(10, 8))  # Change size if needed
+sns.heatmap(f1_pivot_best, annot=True, cmap='viridis', linewidths=.5)
+plt.title('F1-score Heatmap\nBest F1-score per config')
+plt.xlabel('Alpha Value')
+plt.ylabel('Similarity Column')
 plt.tight_layout()
 plt.show()
 
@@ -1093,14 +1154,14 @@ plt.show()
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 # # Bump = Event, (0.35, 0.65), 1, 20 - sim column - max_sim_ctfidf_representation_sentence_list, 0.04 
-# # Precision, recall, F1 = 0.425532, 0.769231, 0.547945
-# best_config = {
-#     'quantiles': (0.35, 0.65),
-#     'min_days_above_upper': 1,
-#     'max_bump_width': 20,
-#     'similarity_column':"max_sim_ctfidf_representation_sentence_list",
-#     'alpha': 0.04,
-# }
+# Precision, recall, F1 = 0.425532, 0.769231, 0.547945
+best_config = {
+    'quantiles': (0.35, 0.65),
+    'min_days_above_upper': 1,
+    'max_bump_width': 20,
+    'similarity_column':"max_sim_ctfidf_representation_sentence_list",
+    'alpha': 0.04,
+}
 
 # # Bump contains date = Event, 0.4, 0.6, 1 ,20 - sim_column - max_sim_ctfidf_representation_sentence_list, 0.03
 # # Precision, recall, F1 = 0.578947, 0.423077, 0.488889
@@ -1116,23 +1177,23 @@ plt.show()
 # Peak close to date = Event, (0.4, 0.6), 1, 20 - sim_column - max_sim_ctfidf_representation_sentence_list, 0.03
 # Precision, recall, F1 = 0.600000, 0.461538, 0.521739
 # USE THIS TO RECREATE BEST RESULTS 
-best_config = {
-    'quantiles': (0.4, 0.6),
-    'min_days_above_upper': 1,
-    'max_bump_width': 20,
-    'similarity_column':"max_sim_ctfidf_representation_sentence_list",
-    'alpha': 0.03,
-}
+# best_config = {
+#     'quantiles': (0.4, 0.6),
+#     'min_days_above_upper': 1,
+#     'max_bump_width': 20,
+#     'similarity_column':"max_sim_ctfidf_representation_sentence_list",
+#     'alpha': 0.03,
+# }
 
 
-# TEMPORARY SOLUTION PUT WHATEVER YOU WANT HERE
-best_config = {
-    'quantiles': (0.4, 0.6),
-    'min_days_above_upper': 5,
-    'max_bump_width': 20,
-    'similarity_column':"max_sim_global_tfidf_representation_weighted_list",
-    'alpha': 0.03,
-}
+# # TEMPORARY SOLUTION PUT WHATEVER YOU WANT HERE
+# best_config = {
+#     'quantiles': (0.4, 0.6),
+#     'min_days_above_upper': 5,
+#     'max_bump_width': 20,
+#     'similarity_column':"max_sim_global_tfidf_representation_weighted_list",
+#     'alpha': 0.03,
+# }
 
 # -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 best_config_df = combined_bump_results_dict[(best_config['quantiles'], best_config['min_days_above_upper'], best_config['max_bump_width'])]
@@ -1240,7 +1301,7 @@ def visualize_bumps(bump_df, N, sim_column = "max_sim_ctfidf_representation_sent
     for ax, (_, row) in zip(axs, sampled_clusters.iterrows()):
         # Extract smoothed values from the DataFrame
         smoothed_values = row['smoothed_values']
-        representation = row['global_tfidf_representation']#global_tfidf_representation, ctfidf_representation
+        representation = row['ctfidf_representation']#global_tfidf_representation, ctfidf_representation
         date = row['date']
 
         # Plot smoothed values
@@ -1298,15 +1359,15 @@ metric_ranges = {
 #    'percentage_above_upper': (0, 50),
 #    'variance_factor': (0, 10),
 #    'total_bumps':(1,1),
-    'topic_id': (0,0),
+    'topic_id': (3,3),
 }
 
 visualize_bumps(best_config_df, 
                 N=1, 
-                sim_column = "max_sim_global_tfidf_representation_weighted_list", #"max_sim_global_tfidf_representation_weighted_list","max_sim_ctfidf_representation_sentence_list"
-                alpha = 0.03,
-                min_date =  datetime.date(2020,2,5),
-                max_date =  datetime.date(2020,2,5),
+                sim_column = "max_sim_ctfidf_representation_sentence_list", #"max_sim_global_tfidf_representation_weighted_list","max_sim_ctfidf_representation_sentence_list"
+                alpha = 0.04,
+                min_date =  datetime.date(2019,7,15),
+                max_date =  datetime.date(2019,7,15),
                 with_bump = False,
                 max_days_from_peak = 100,
                 metric_ranges = metric_ranges
@@ -1318,7 +1379,7 @@ sns.set(style="whitegrid")
 
 def visualize_distributions(data_frame):
     plt.figure(figsize=(6, 4))
-    sns.histplot(data_frame['percentage_below_lower'], kde=True, color='red', bins=30)
+    sns.histplot(data_frame['percentage_below_lower'], kde=True, color='blue', bins=30)
     plt.title('Distribution of % Below Lower Threshold')
     plt.xlabel('% of Time Below Lower Threshold')
     plt.ylabel('Frequency')
